@@ -1,0 +1,26 @@
+{
+  "version": 2,
+  "buildCommand": "npm run build",
+  "outputDirectory": "dist",
+  "framework": "vite",
+  "rewrites": [
+    {
+      "source": "/api/(.*)",
+      "destination": "/api/$1"
+    }
+  ],
+  "functions": {
+    "api/**/*.js": {
+      "runtime": "nodejs18.x"
+    }
+  },
+  "env": {
+    "VITE_SUPABASE_URL": "@vite_supabase_url",
+    "VITE_SUPABASE_ANON_KEY": "@vite_supabase_anon_key",
+    "VITE_RETELL_API_KEY": "@vite_retell_api_key",
+    "VITE_RETELL_PHONE_NUMBER": "@vite_retell_phone_number",
+    "VITE_RETELL_VOICE_ID": "@vite_retell_voice_id",
+    "VITE_RETELL_LLM_ID": "@vite_retell_llm_id"
+  }
+}
+

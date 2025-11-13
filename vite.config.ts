@@ -16,6 +16,11 @@ export default defineConfig({
       'pages': path.resolve(__dirname, './src/pages'),
       '@lib': path.resolve(__dirname, './src/lib'),
       '(components)': path.resolve(__dirname, './src/(components)'),
+      // Alias retell-sdk to empty module for browser (it's server-side only)
+      'retell-sdk': path.resolve(__dirname, './src/lib/retell-sdk-stub.ts'),
     }
-  }
+  },
+  optimizeDeps: {
+    exclude: ['retell-sdk', 'retell-client-js-sdk'],
+  },
 })
