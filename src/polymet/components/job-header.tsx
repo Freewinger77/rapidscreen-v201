@@ -32,54 +32,18 @@ import type { Job } from "@/polymet/data/jobs-data";
 
 interface JobHeaderProps {
   job: Job;
-  onJobUpdated?: () => void; // Callback to refresh job data
 }
 
-export function JobHeader({ job, onJobUpdated }: JobHeaderProps) {
+export function JobHeader({ job }: JobHeaderProps) {
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
   const [showCampaignWizard, setShowCampaignWizard] = useState(false);
   const [editedJob, setEditedJob] = useState(job);
-  const [isSaving, setIsSaving] = useState(false);
 
   const progressPercentage = (editedJob.hired / editedJob.target) * 100;
 
-  const handleSaveEdit = async () => {
-    setIsSaving(true);
-    
-    try {
-      // Save to Supabase
-      const { updateJob } = await import('@/polymet/data/supabase-storage');
-      
-      const success = await updateJob(editedJob.id, {
-        title: editedJob.title,
-        company: editedJob.company,
-        location: editedJob.location,
-        employmentType: editedJob.employmentType,
-        salaryRange: editedJob.salaryRange,
-        openPositions: editedJob.openPositions,
-        hired: editedJob.hired,
-        target: editedJob.target,
-        description: editedJob.description,
-        tags: editedJob.tags,
-      });
-      
-      if (success) {
-        console.log('✅ Job updated successfully');
-        setIsEditDialogOpen(false);
-        
-        // Notify parent to refresh
-        if (onJobUpdated) {
-          onJobUpdated();
-        }
-      } else {
-        alert('Failed to update job. Please try again.');
-      }
-    } catch (error) {
-      console.error('Error updating job:', error);
-      alert('Error updating job. Please try again.');
-    } finally {
-      setIsSaving(false);
-    }
+  const handleSaveEdit = () => {
+    // In a real app, this would update the job in the backend
+    setIsEditDialogOpen(false);
   };
 
   return (
@@ -350,13 +314,10 @@ export function JobHeader({ job, onJobUpdated }: JobHeaderProps) {
                 setEditedJob(job);
                 setIsEditDialogOpen(false);
               }}
-              disabled={isSaving}
             >
               Cancel
             </Button>
-            <Button onClick={handleSaveEdit} disabled={isSaving}>
-              {isSaving ? 'Saving...' : 'Save Changes'}
-            </Button>
+            <Button onClick={handleSaveEdit}>Save Changes</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

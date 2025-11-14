@@ -1,12 +1,12 @@
 import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
 import { jobsData, type Job } from "@/polymet/data/jobs-data";
-import type { Campaign } from "@/polymet/data/campaigns-data";
+import { getCampaignsByJobId } from "@/polymet/data/campaigns-data";
 import {
   loadJobs,
-  loadCampaigns,
-  deleteJob as deleteJobFromDb,
-} from "@/polymet/data/supabase-storage";
+  saveJobs,
+  deleteJob as deleteJobFromStorage,
+} from "@/polymet/data/storage-manager";
 import { Button } from "@/components/ui/button";
 import {
   PlusIcon,
@@ -18,7 +18,6 @@ import {
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
-import { Skeleton } from "@/components/ui/skeleton";
 import { JobCreationDialog } from "@/polymet/components/job-creation-dialog";
 import {
   AlertDialog,
@@ -33,103 +32,19 @@ import {
 
 export function JobsPage() {
   const [showJobDialog, setShowJobDialog] = useState(false);
-  const [jobs, setJobs] = useState<Job[]>(jobsData);
-  const [campaigns, setCampaigns] = useState<Campaign[]>([]);
+  const [jobs, setJobs] = useState(loadJobs(jobsData));
   const [deleteJobId, setDeleteJobId] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
 
-  // Load jobs and campaigns from Supabase on mount
+  // Save jobs to storage whenever they change
   useEffect(() => {
-    async function fetchData() {
-      try {
-        const [supabaseJobs, supabaseCampaigns] = await Promise.all([
-          loadJobs(),
-          loadCampaigns()
-        ]);
-        
-        if (supabaseJobs.length > 0) {
-          setJobs(supabaseJobs);
-        } else {
-          console.log('No jobs in Supabase, using mock data');
-          setJobs(jobsData);
-        }
-        
-        setCampaigns(supabaseCampaigns);
-        
-      } catch (error) {
-        console.error('Error loading data:', error);
-        setJobs(jobsData);
-      }
-      setLoading(false);
-    }
-    fetchData();
-  }, []);
+    saveJobs(jobs);
+  }, [jobs]);
 
-  const handleDeleteJob = async (jobId: string) => {
-    // Optimistic update
+  const handleDeleteJob = (jobId: string) => {
     setJobs(jobs.filter((job) => job.id !== jobId));
-    
-    // Delete from Supabase
-    await deleteJobFromDb(jobId);
+    deleteJobFromStorage(jobId);
     setDeleteJobId(null);
   };
-
-  if (loading) {
-    return (
-      <div className="p-8">
-        {/* Header Skeleton */}
-        <div className="mb-8">
-          <div className="flex items-center justify-between mb-2">
-            <div>
-              <Skeleton className="h-9 w-32 mb-2" style={{ marginLeft: "15px" }} />
-              <Skeleton className="h-5 w-64" style={{ marginLeft: "15px" }} />
-            </div>
-            <Skeleton className="h-10 w-36" />
-          </div>
-        </div>
-
-        {/* Jobs Grid Skeleton */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          {[1, 2].map((i) => (
-            <div
-              key={i}
-              className="p-6 rounded-lg border border-border bg-card"
-            >
-              <div className="space-y-4">
-                {/* Title */}
-                <div>
-                  <Skeleton className="h-7 w-3/4 mb-2" />
-                  <Skeleton className="h-4 w-1/2" />
-                </div>
-
-                {/* Progress */}
-                <div>
-                  <div className="flex items-center justify-between mb-2">
-                    <Skeleton className="h-4 w-16" />
-                    <Skeleton className="h-4 w-16" />
-                  </div>
-                  <Skeleton className="h-2 w-full" />
-                </div>
-
-                {/* Details */}
-                <div className="space-y-2">
-                  <Skeleton className="h-4 w-32" />
-                  <Skeleton className="h-4 w-40" />
-                </div>
-
-                {/* Tags */}
-                <div className="flex items-center gap-2">
-                  <Skeleton className="h-5 w-16" />
-                  <Skeleton className="h-5 w-20" />
-                  <Skeleton className="h-5 w-14" />
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className="p-8">
@@ -164,9 +79,8 @@ export function JobsPage() {
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         {jobs.map((job) => {
           const progressPercentage = (job.hired / job.target) * 100;
-          // Get campaigns ONLY for this specific job
-          const jobCampaigns = campaigns.filter((c) => c.jobId === job.id || c.linkJob === job.id);
-          const activeCampaign = jobCampaigns.find((c) => c.status === "active");
+          const campaigns = getCampaignsByJobId(job.id);
+          const activeCampaign = campaigns.find((c) => c.status === "active");
 
           return (
             <div
@@ -241,44 +155,28 @@ export function JobsPage() {
                   </div>
 
                   {/* Active Campaign */}
-                  {jobCampaigns.length > 0 ? (
-                    activeCampaign ? (
-                      <div className="pt-3 border-t border-border">
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-2">
-                            <span className="text-xs text-muted-foreground">
-                              Active Campaign
-                            </span>
-                            <div className="flex items-center gap-1.5">
-                              <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
-                              <span className="text-xs font-medium text-foreground">
-                                {activeCampaign.name}
-                              </span>
-                            </div>
-                          </div>
-                          <div className="flex items-center gap-1 text-green-500">
-                            <TrendingUpIcon className="w-3 h-3" />
-                            <span className="text-xs font-medium">
-                              {activeCampaign.responseRate}%
-                            </span>
-                          </div>
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="pt-3 border-t border-border">
+                  {activeCampaign && (
+                    <div className="pt-3 border-t border-border">
+                      <div className="flex items-center justify-between">
                         <div className="flex items-center gap-2">
                           <span className="text-xs text-muted-foreground">
-                            {jobCampaigns.length} campaign{jobCampaigns.length !== 1 ? 's' : ''} (not active)
+                            Active Campaign
+                          </span>
+                          <div className="flex items-center gap-1.5">
+                            <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
+
+                            <span className="text-xs font-medium text-foreground">
+                              {activeCampaign.name}
+                            </span>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-1 text-green-500">
+                          <TrendingUpIcon className="w-3 h-3" />
+
+                          <span className="text-xs font-medium">
+                            {activeCampaign.responseRate}%
                           </span>
                         </div>
-                      </div>
-                    )
-                  ) : (
-                    <div className="pt-3 border-t border-border">
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs text-muted-foreground italic">
-                          No campaigns yet
-                        </span>
                       </div>
                     </div>
                   )}
@@ -292,30 +190,14 @@ export function JobsPage() {
       <JobCreationDialog
         open={showJobDialog}
         onOpenChange={setShowJobDialog}
-        onSave={async (jobData) => {
-          console.log("💾 Saving new job to Supabase...", jobData);
-          
-          // Save to Supabase
-          const { saveJob, loadJobs } = await import('@/polymet/data/supabase-storage');
-          
-          const jobId = await saveJob({
+        onSave={(jobData) => {
+          const newJob = {
             ...jobData,
+            id: `job_${Date.now()}`,
             candidates: [],
-          });
-          
-          if (jobId) {
-            console.log(`✅ Job saved to Supabase: ${jobId}`);
-            
-            // Refresh jobs and campaigns from database
-            const [updatedJobs, updatedCampaigns] = await Promise.all([
-              loadJobs(),
-              loadCampaigns()
-            ]);
-            setJobs(updatedJobs);
-            setCampaigns(updatedCampaigns);
-          } else {
-            console.error("❌ Failed to save job");
-          }
+          };
+          setJobs([...jobs, newJob]);
+          console.log("Job created:", newJob);
         }}
       />
 

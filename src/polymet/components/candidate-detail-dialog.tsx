@@ -68,72 +68,55 @@ export function CandidateDetailDialog({
   const whatsappMessages = candidate.whatsappMessages || [];
   const calls = candidate.calls || [];
 
-  const handleSaveNote = async (note: Omit<CandidateNote, "id" | "timestamp">) => {
-    if (!candidate) return;
-
+  const handleSaveNote = (note: Omit<CandidateNote, "id" | "timestamp">) => {
     if (editingNote) {
       // Update existing note
-      const { updateCandidateNote } = await import('@/polymet/data/supabase-storage');
-      const success = await updateCandidateNote(editingNote.id, note);
-      
-      if (success) {
-        const updatedNotes = candidateNotes.map((n) =>
-          n.id === editingNote.id
-            ? {
-                ...n,
-                ...note,
-                timestamp: new Date().toLocaleString("en-GB", {
-                  day: "2-digit",
-                  month: "2-digit",
-                  year: "numeric",
-                  hour: "2-digit",
-                  minute: "2-digit",
-                }),
-              }
-            : n
-        );
-        setCandidateNotes(updatedNotes);
-        if (onNotesUpdate) {
-          onNotesUpdate(candidate.id, updatedNotes);
-        }
-      }
-      setEditingNote(null);
-    } else {
-      // Create new note
-      const { addCandidateNote } = await import('@/polymet/data/supabase-storage');
-      const noteId = await addCandidateNote(candidate.id, note);
-      
-      if (noteId) {
-        const newNote: CandidateNote = {
-          ...note,
-          id: noteId,
-          timestamp: new Date().toLocaleString("en-GB", {
-            day: "2-digit",
-            month: "2-digit",
-            year: "numeric",
-            hour: "2-digit",
-            minute: "2-digit",
-          }),
-        };
-        const updatedNotes = [newNote, ...candidateNotes];
-        setCandidateNotes(updatedNotes);
-        if (onNotesUpdate) {
-          onNotesUpdate(candidate.id, updatedNotes);
-        }
-      }
-    }
-  };
-
-  const handleDeleteNote = async (noteId: string) => {
-    const { deleteCandidateNote } = await import('@/polymet/data/supabase-storage');
-    const success = await deleteCandidateNote(noteId);
-    
-    if (success) {
-      const updatedNotes = candidateNotes.filter((n) => n.id !== noteId);
+      const updatedNotes = candidateNotes.map((n) =>
+        n.id === editingNote.id
+          ? {
+              ...n,
+              ...note,
+              timestamp: new Date().toLocaleString("en-GB", {
+                day: "2-digit",
+                month: "2-digit",
+                year: "numeric",
+                hour: "2-digit",
+                minute: "2-digit",
+              }),
+            }
+          : n
+      );
       setCandidateNotes(updatedNotes);
       if (candidate && onNotesUpdate) {
         onNotesUpdate(candidate.id, updatedNotes);
       }
+      setEditingNote(null);
+    } else {
+      // Create new note
+      const newNote: CandidateNote = {
+        ...note,
+        id: `n${Date.now()}`,
+        timestamp: new Date().toLocaleString("en-GB", {
+          day: "2-digit",
+          month: "2-digit",
+          year: "numeric",
+          hour: "2-digit",
+          minute: "2-digit",
+        }),
+      };
+      const updatedNotes = [newNote, ...candidateNotes];
+      setCandidateNotes(updatedNotes);
+      if (candidate && onNotesUpdate) {
+        onNotesUpdate(candidate.id, updatedNotes);
+      }
+    }
+  };
+
+  const handleDeleteNote = (noteId: string) => {
+    const updatedNotes = candidateNotes.filter((n) => n.id !== noteId);
+    setCandidateNotes(updatedNotes);
+    if (candidate && onNotesUpdate) {
+      onNotesUpdate(candidate.id, updatedNotes);
     }
   };
 

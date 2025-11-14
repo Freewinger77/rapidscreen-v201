@@ -4,13 +4,11 @@ import { ActiveCampaignsPanel } from "@/polymet/components/active-campaigns-pane
 interface MainLayoutProps {
   children: React.ReactNode;
   showCampaigns?: boolean;
-  jobId?: string; // Pass job ID to filter campaigns
 }
 
 export function MainLayout({
   children,
   showCampaigns = true,
-  jobId,
 }: MainLayoutProps) {
   return (
     <div className="flex h-screen overflow-hidden bg-background">
@@ -21,7 +19,7 @@ export function MainLayout({
           <div className="p-8">{children}</div>
         </main>
 
-        {showCampaigns && <ActiveCampaignsPanel jobId={jobId} />}
+        {showCampaigns && <ActiveCampaignsPanel />}
       </div>
     </div>
   );

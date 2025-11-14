@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { useZoomDialog } from "@/polymet/components/animated-dialog";
 import {
   Dialog,
@@ -36,7 +36,7 @@ import {
 } from "lucide-react";
 import { format } from "date-fns";
 import { cn } from "@/lib/utils";
-import { jobsData, type Job } from "@/polymet/data/jobs-data";
+import { jobsData } from "@/polymet/data/jobs-data";
 import type {
   CampaignTarget,
   CampaignMatrix,
@@ -73,12 +73,9 @@ export function CampaignWizard({
   const [startDate, setStartDate] = useState<Date>();
   const [endDate, setEndDate] = useState<Date>();
   const [selectedChannels, setSelectedChannels] = useState<string[]>([]);
-  const [uploadMethod, setUploadMethod] = useState<"csv" | "existing" | "manual">(
+  const [uploadMethod, setUploadMethod] = useState<"csv" | "existing">(
     "existing"
   );
-  const [manualCandidates, setManualCandidates] = useState<Array<{ name: string; phone: string }>>([]);
-  const [manualCandidateName, setManualCandidateName] = useState("");
-  const [manualCandidatePhone, setManualCandidatePhone] = useState("");
   const [targets, setTargets] = useState<CampaignTarget[]>([
     {
       id: "t1",
@@ -123,21 +120,6 @@ export function CampaignWizard({
   const [showCallTester, setShowCallTester] = useState(false);
   const [showWhatsAppTester, setShowWhatsAppTester] = useState(false);
   const [showLaunchConfirmation, setShowLaunchConfirmation] = useState(false);
-  const [jobs, setJobs] = useState<Job[]>(jobsData);
-
-  // Load jobs from Supabase when dialog opens
-  useEffect(() => {
-    if (open) {
-      async function fetchJobs() {
-        const { loadJobs } = await import('@/polymet/data/supabase-storage');
-        const supabaseJobs = await loadJobs();
-        if (supabaseJobs.length > 0) {
-          setJobs(supabaseJobs);
-        }
-      }
-      fetchJobs();
-    }
-  }, [open]);
 
   const toggleChannel = (channel: string) => {
     setSelectedChannels((prev) =>
@@ -217,9 +199,6 @@ export function CampaignWizard({
       channels: selectedChannels,
       targets,
       matrices,
-      datasetIds: selectedDatasetIds, // Include selected dataset IDs
-      manualCandidates: uploadMethod === "manual" ? manualCandidates : [], // Include manual candidates
-      uploadMethod, // Track which method was used
     };
     onComplete?.(campaignData);
     setShowLaunchConfirmation(false);
@@ -347,7 +326,7 @@ export function CampaignWizard({
                       <SelectValue placeholder="Select job type" />
                     </SelectTrigger>
                     <SelectContent className="bg-popover border-border">
-                      {jobs.map((job) => (
+                      {jobsData.map((job) => (
                         <SelectItem
                           key={job.id}
                           value={job.id}
@@ -492,29 +471,12 @@ export function CampaignWizard({
                         : "Select Dataset"}
                     </Button>
                   </div>
-                  
-                  {/* Subtle manual entry link */}
-                  <button
-                    type="button"
-                    onClick={() => setUploadMethod("manual")}
-                    className={cn(
-                      "w-full text-center text-xs py-1 rounded transition-colors",
-                      uploadMethod === "manual"
-                        ? "text-primary font-medium"
-                        : "text-muted-foreground hover:text-foreground"
-                    )}
-                  >
-                    {uploadMethod === "manual" && manualCandidates.length > 0 ? (
-                      `✓ ${manualCandidates.length} candidate${manualCandidates.length !== 1 ? 's' : ''} added manually`
-                    ) : (
-                      "+ or add candidates manually"
-                    )}
-                  </button>
                 </div>
 
                 {uploadMethod === "csv" && (
                   <div className="border-2 border-dashed border-border rounded-lg p-8 text-center">
                     <UploadIcon className="w-12 h-12 mx-auto mb-4 text-muted-foreground" />
+
                     <p className="text-muted-foreground mb-1">
                       Drag and drop your CV here or click to browse your files
                     </p>
@@ -522,105 +484,10 @@ export function CampaignWizard({
                       Accepted formats: CSV, XLSX(Excel), XLSM
                     </p>
                     <p className="text-xs text-muted-foreground mt-4">
-                      The AI will automatically extract the candidates information
+                      The AI will automatically extract the candidates
+                      information
                     </p>
                   </div>
-                )}
-
-                {uploadMethod === "manual" && (
-                  <Card>
-                    <CardHeader>
-                      <CardTitle className="text-lg">Add Candidates Manually</CardTitle>
-                      <CardDescription>
-                        Add candidates one by one with their name and phone number
-                      </CardDescription>
-                    </CardHeader>
-                    <CardContent className="space-y-4">
-                      <div className="flex gap-2">
-                        <div className="flex-1">
-                          <Input
-                            placeholder="Full Name"
-                            value={manualCandidateName}
-                            onChange={(e) => setManualCandidateName(e.target.value)}
-                          />
-                        </div>
-                        <div className="flex-1">
-                          <Input
-                            placeholder="+44 Phone Number"
-                            value={manualCandidatePhone}
-                            onChange={(e) => setManualCandidatePhone(e.target.value)}
-                          />
-                        </div>
-                        <Button
-                          type="button"
-                          onClick={() => {
-                            if (manualCandidateName.trim() && manualCandidatePhone.trim()) {
-                              setManualCandidates([...manualCandidates, {
-                                name: manualCandidateName.trim(),
-                                phone: manualCandidatePhone.trim()
-                              }]);
-                              setManualCandidateName("");
-                              setManualCandidatePhone("");
-                            }
-                          }}
-                          disabled={!manualCandidateName.trim() || !manualCandidatePhone.trim()}
-                        >
-                          <PlusIcon className="w-4 h-4 mr-2" />
-                          Add
-                        </Button>
-                      </div>
-
-                      {manualCandidates.length > 0 ? (
-                        <div className="space-y-2 max-h-[300px] overflow-y-auto border border-border rounded-md p-3">
-                          <div className="flex items-center justify-between mb-2">
-                            <Label className="text-sm font-medium">
-                              {manualCandidates.length} candidate{manualCandidates.length !== 1 ? 's' : ''} added
-                            </Label>
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => setManualCandidates([])}
-                            >
-                              Clear All
-                            </Button>
-                          </div>
-                          {manualCandidates.map((candidate, index) => (
-                            <div
-                              key={index}
-                              className="flex items-center justify-between p-3 bg-card rounded border border-border hover:border-primary/50 transition-colors"
-                            >
-                              <div className="flex-1">
-                                <p className="text-sm font-medium">{candidate.name}</p>
-                                <p className="text-xs text-muted-foreground">{candidate.phone}</p>
-                              </div>
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="icon"
-                                className="h-8 w-8"
-                                onClick={() => {
-                                  setManualCandidates(manualCandidates.filter((_, i) => i !== index));
-                                }}
-                              >
-                                <XIcon className="w-4 h-4" />
-                              </Button>
-                            </div>
-                          ))}
-                        </div>
-                      ) : (
-                        <div className="text-center py-8 border-2 border-dashed border-border rounded-lg">
-                          <UsersIcon className="w-12 h-12 mx-auto mb-3 text-muted-foreground" />
-                          <p className="text-sm text-muted-foreground">
-                            No candidates added yet
-                          </p>
-                          <p className="text-xs text-muted-foreground mt-1">
-                            Enter name and phone number above to get started
-                          </p>
-                        </div>
-                      )}
-                    </CardContent>
-                  </Card>
                 )}
               </div>
             )}
@@ -1100,7 +967,7 @@ export function CampaignWizard({
                         className="flex-1"
                       >
                         <PhoneIcon className="w-4 h-4 mr-2" />
-                        Test in Browser
+                        Test Call Agent
                       </Button>
                     )}
                     {selectedChannels.includes("WhatsApp") && (
@@ -1159,13 +1026,6 @@ export function CampaignWizard({
           matrices.find((m) => m.name === "Initial Outreach")?.callScript ||
           "Hi, this is calling from the recruitment team."
         }
-        campaign={{
-          name: campaignName || 'Test Campaign',
-          matrices: matrices,
-          targets: targets,
-          channels: selectedChannels,
-        }}
-        job={jobs.find(j => j.id === linkJob)}
       />
 
       <WhatsAppAgentTester

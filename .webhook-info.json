@@ -1,0 +1,6 @@
+{
+  "port": 3001,
+  "localWebhookUrl": "http://localhost:3001/api/retell-webhook",
+  "webTokenUrl": "http://localhost:3001/api/retell-get-web-token",
+  "timestamp": "2025-11-06T18:20:11.790Z"
+}

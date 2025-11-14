@@ -2,7 +2,7 @@ import { BrowserRouter as Router, Routes, Route } from "react-router-dom";
 import { MainLayout } from "@/polymet/layouts/main-layout";
 import { DashboardPage } from "@/polymet/pages/dashboard";
 import { JobsPage } from "@/polymet/pages/jobs";
-import { JobDetailsWrapper } from "@/polymet/pages/job-details-wrapper";
+import { JobDetailsPage } from "@/polymet/pages/job-details";
 import { CampaignsPage } from "@/polymet/pages/campaigns";
 import { CampaignDetailsPage } from "@/polymet/pages/campaign-details";
 import { DatasetsPage } from "@/polymet/pages/datasets";
@@ -49,7 +49,11 @@ export default function RecruitmentApp() {
 
         <Route
           path="/job/:jobId"
-          element={<JobDetailsWrapper />}
+          element={
+            <MainLayout>
+              <JobDetailsPage />
+            </MainLayout>
+          }
         />
 
         <Route

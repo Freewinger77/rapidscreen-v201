@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { PlusIcon, SearchIcon } from "lucide-react";
 import type { Candidate, Job } from "@/polymet/data/jobs-data";
 import type { CampaignCandidate } from "@/polymet/data/campaigns-data";
+import { updateCandidates } from "@/polymet/data/storage-manager";
 import {
   Dialog,
   DialogContent,
@@ -60,82 +61,11 @@ export function KanbanBoard({ job }: KanbanBoardProps) {
   const [candidates, setCandidates] = useState<Candidate[]>(job.candidates);
   const [swimlanes, setSwimlanes] =
     useState<SwimlaneConfig[]>(defaultSwimlanes);
-  const [swimlanesLoaded, setSwimlanesLoaded] = useState(false);
 
-  // Load custom columns from Supabase on mount
+  // Persist candidates to storage whenever they change
   useEffect(() => {
-    let isMounted = true;
-    
-    async function loadColumns() {
-      try {
-        const { loadJobColumns, saveJobColumn } = await import('@/polymet/data/supabase-storage');
-        const customColumns = await loadJobColumns(job.id);
-        
-        if (!isMounted) return;
-        
-        if (customColumns.length > 0) {
-          // Use existing columns from database
-          const loadedSwimlanes: SwimlaneConfig[] = customColumns.map(col => ({
-            id: col.id,
-            title: col.title,
-            status: col.status as Candidate["status"],
-            color: col.color,
-          }));
-          setSwimlanes(loadedSwimlanes);
-          console.log(`✅ Loaded ${customColumns.length} columns from Supabase`);
-        } else {
-          // First time: initialize with default columns
-          console.log('📝 Initializing default columns in Supabase...');
-          const newColumnIds: string[] = [];
-          
-          for (let i = 0; i < defaultSwimlanes.length; i++) {
-            const columnId = await saveJobColumn({
-              jobId: job.id,
-              title: defaultSwimlanes[i].title,
-              status: defaultSwimlanes[i].status,
-              color: defaultSwimlanes[i].color,
-              position: i,
-            });
-            if (columnId) newColumnIds.push(columnId);
-          }
-          
-          if (!isMounted) return;
-          
-          // Reload to get the saved columns with their IDs
-          const reloadedColumns = await loadJobColumns(job.id);
-          if (reloadedColumns.length > 0) {
-            const loadedSwimlanes: SwimlaneConfig[] = reloadedColumns.map(col => ({
-              id: col.id,
-              title: col.title,
-              status: col.status as Candidate["status"],
-              color: col.color,
-            }));
-            setSwimlanes(loadedSwimlanes);
-            console.log('✅ Default columns initialized');
-          }
-        }
-        
-        if (isMounted) {
-          setSwimlanesLoaded(true);
-        }
-      } catch (error) {
-        console.error('Error loading columns:', error);
-        if (isMounted) {
-          setSwimlanesLoaded(true);
-        }
-      }
-    }
-    
-    loadColumns();
-    
-    // Cleanup function to prevent state updates after unmount
-    return () => {
-      isMounted = false;
-    };
-  }, [job.id]);
-
-  // Note: Candidates are now saved to Supabase in real-time via individual actions
-  // No need for bulk persistence on every change
+    updateCandidates(job.id, candidates);
+  }, [candidates, job.id]);
   const [searchQuery, setSearchQuery] = useState("");
   const [draggingId, setDraggingId] = useState<string | null>(null);
 
@@ -193,32 +123,27 @@ export function KanbanBoard({ job }: KanbanBoardProps) {
   const [candidateDialogOpen, setCandidateDialogOpen] = useState(false);
 
   // Handle note updates from candidate dialog
-  const handleUpdateCandidateNotes = async (candidateId: string, notes: any[]) => {
-    // Update local state
+  const handleUpdateCandidateNotes = (candidateId: string, notes: any[]) => {
     setCandidates((prev) => {
       const updated = prev.map((candidate) =>
         candidate.id === candidateId ? { ...candidate, notes } : candidate
       );
+      // Data will be persisted by useEffect
       return updated;
     });
-    // Notes are already saved to Supabase in the dialog, just update local state
   };
 
-  const handleDrop = async (candidateId: string, newStatus: Candidate["status"]) => {
-    // Optimistic update
+  const handleDrop = (candidateId: string, newStatus: Candidate["status"]) => {
     setCandidates((prev) => {
       const updated = prev.map((candidate) =>
         candidate.id === candidateId
           ? { ...candidate, status: newStatus }
           : candidate
       );
+      // Data will be persisted by useEffect
       return updated;
     });
     setDraggingId(null);
-
-    // Save to Supabase
-    const { moveCandidateToStatus } = await import('@/polymet/data/supabase-storage');
-    await moveCandidateToStatus(candidateId, newStatus);
   };
 
   const handleDragStart = (candidateId: string) => {
@@ -259,72 +184,43 @@ export function KanbanBoard({ job }: KanbanBoardProps) {
     });
   };
 
-  const handleAddCandidate = async () => {
+  const handleAddCandidate = () => {
     if (!newCandidateName || !newCandidatePhone) return;
 
-    // Save to Supabase
-    const { saveCandidate } = await import('@/polymet/data/supabase-storage');
-    const candidateId = await saveCandidate(job.id, {
+    const newCandidate: Candidate = {
+      id: `c${Date.now()}`,
       name: newCandidateName,
       phone: newCandidatePhone,
       status: newCandidateStatus,
-    });
+    };
 
-    if (candidateId) {
-      const newCandidate: Candidate = {
-        id: candidateId,
-        name: newCandidateName,
-        phone: newCandidatePhone,
-        status: newCandidateStatus,
-      };
+    setCandidates((prev) => [...prev, newCandidate]);
 
-      setCandidates((prev) => [...prev, newCandidate]);
-
-      // Reset form
-      setNewCandidateName("");
-      setNewCandidatePhone("");
-      setNewCandidateStatus(swimlanes[0]?.status || "not-contacted");
-      setIsAddCandidateOpen(false);
-    }
+    // Reset form
+    setNewCandidateName("");
+    setNewCandidatePhone("");
+    setNewCandidateStatus(swimlanes[0]?.status || "not-contacted");
+    setIsAddCandidateOpen(false);
   };
 
-  const handleAddColumn = async () => {
+  const handleAddColumn = () => {
     if (!newColumnTitle.trim()) return;
 
     const newStatus = `custom-${Date.now()}` as Candidate["status"];
-    const position = swimlanes.length;
-
-    // Save to Supabase first
-    const { saveJobColumn } = await import('@/polymet/data/supabase-storage');
-    const columnId = await saveJobColumn({
-      jobId: job.id,
+    const newSwimlane: SwimlaneConfig = {
+      id: `swimlane-${Date.now()}`,
       title: newColumnTitle.trim(),
       status: newStatus,
       color: newColumnColor,
-      position,
-    });
+    };
 
-    if (columnId) {
-      const newSwimlane: SwimlaneConfig = {
-        id: columnId,
-        title: newColumnTitle.trim(),
-        status: newStatus,
-        color: newColumnColor,
-      };
-
-      setSwimlanes((prev) => [...prev, newSwimlane]);
-      console.log('✅ Column saved to Supabase');
-    } else {
-      alert('Failed to create column. Please try again.');
-    }
-
+    setSwimlanes((prev) => [...prev, newSwimlane]);
     setNewColumnTitle("");
     setNewColumnColor("hsl(var(--chart-1))");
     setIsAddColumnOpen(false);
   };
 
-  const handleEditColumn = async (id: string, newTitle: string, newColor: string) => {
-    // Optimistic update
+  const handleEditColumn = (id: string, newTitle: string, newColor: string) => {
     setSwimlanes((prev) =>
       prev.map((swimlane) =>
         swimlane.id === id
@@ -332,22 +228,9 @@ export function KanbanBoard({ job }: KanbanBoardProps) {
           : swimlane
       )
     );
-
-    // Save to Supabase
-    const { updateJobColumn } = await import('@/polymet/data/supabase-storage');
-    const success = await updateJobColumn(id, {
-      title: newTitle,
-      color: newColor,
-    });
-
-    if (success) {
-      console.log('✅ Column updated in Supabase');
-    } else {
-      alert('Failed to update column');
-    }
   };
 
-  const handleDeleteColumn = async () => {
+  const handleDeleteColumn = () => {
     if (!columnToDelete || !moveToColumn) return;
 
     const columnToDeleteData = swimlanes.find((s) => s.id === columnToDelete);
@@ -355,18 +238,7 @@ export function KanbanBoard({ job }: KanbanBoardProps) {
 
     if (!columnToDeleteData || !targetColumn) return;
 
-    // Move all candidates from deleted column to target column in database
-    const candidatesToMove = candidates.filter(
-      (c) => c.status === columnToDeleteData.status
-    );
-
-    // Update candidates in Supabase
-    const { moveCandidateToStatus } = await import('@/polymet/data/supabase-storage');
-    for (const candidate of candidatesToMove) {
-      await moveCandidateToStatus(candidate.id, targetColumn.status);
-    }
-
-    // Move all candidates locally
+    // Move all candidates from deleted column to target column
     setCandidates((prev) =>
       prev.map((candidate) =>
         candidate.status === columnToDeleteData.status
@@ -375,17 +247,8 @@ export function KanbanBoard({ job }: KanbanBoardProps) {
       )
     );
 
-    // Delete column from Supabase
-    const { deleteJobColumn } = await import('@/polymet/data/supabase-storage');
-    const success = await deleteJobColumn(columnToDelete);
-
-    if (success) {
-      // Remove the column locally
-      setSwimlanes((prev) => prev.filter((s) => s.id !== columnToDelete));
-      console.log('✅ Column deleted from Supabase');
-    } else {
-      alert('Failed to delete column');
-    }
+    // Remove the column
+    setSwimlanes((prev) => prev.filter((s) => s.id !== columnToDelete));
 
     // Reset state
     setColumnToDelete(null);

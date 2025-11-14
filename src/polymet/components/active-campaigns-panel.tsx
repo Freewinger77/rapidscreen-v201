@@ -1,38 +1,11 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { Link } from "react-router-dom";
-import type { Campaign } from "@/polymet/data/campaigns-data";
-import { loadCampaigns } from "@/polymet/data/supabase-storage";
+import { campaignsData } from "@/polymet/data/campaigns-data";
 import { ChevronRightIcon, ChevronLeftIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
-interface ActiveCampaignsPanelProps {
-  jobId?: string; // Filter campaigns by this job ID
-}
-
-export function ActiveCampaignsPanel({ jobId }: ActiveCampaignsPanelProps = {}) {
+export function ActiveCampaignsPanel() {
   const [isCollapsed, setIsCollapsed] = useState(false);
-  const [campaigns, setCampaigns] = useState<Campaign[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  // Load campaigns from Supabase and filter by job
-  useEffect(() => {
-    async function fetchCampaigns() {
-      try {
-        const allCampaigns = await loadCampaigns();
-        
-        // Filter by job ID if provided
-        const filteredCampaigns = jobId
-          ? allCampaigns.filter((c) => c.jobId === jobId || c.linkJob === jobId)
-          : allCampaigns.filter((c) => c.status === 'active');
-        
-        setCampaigns(filteredCampaigns);
-      } catch (error) {
-        console.error('Error loading campaigns:', error);
-      }
-      setLoading(false);
-    }
-    fetchCampaigns();
-  }, [jobId]);
 
   return (
     <div
@@ -72,22 +45,7 @@ export function ActiveCampaignsPanel({ jobId }: ActiveCampaignsPanelProps = {}) 
 
         {/* Campaigns List */}
         <div className="space-y-4">
-          {loading ? (
-            <div className="text-sm text-muted-foreground">Loading campaigns...</div>
-          ) : campaigns.length === 0 ? (
-            <div className="p-4 rounded-lg border border-dashed border-border text-center">
-              <p className="text-sm text-muted-foreground">No campaigns yet</p>
-              {jobId && (
-                <Link
-                  to="/campaigns"
-                  className="text-xs text-primary hover:underline inline-block mt-2"
-                >
-                  Create a campaign for this job
-                </Link>
-              )}
-            </div>
-          ) : (
-            campaigns.map((campaign) => (
+          {campaignsData.map((campaign) => (
             <div
               key={campaign.id}
               className="p-4 rounded-lg border border-border bg-card space-y-3 hover:border-primary/50 transition-colors"
@@ -124,7 +82,7 @@ export function ActiveCampaignsPanel({ jobId }: ActiveCampaignsPanelProps = {}) 
                 View Details
               </Link>
             </div>
-          )))}
+          ))}
         </div>
       </div>
     </div>
