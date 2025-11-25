@@ -162,6 +162,7 @@ export function CampaignWizard({
   const [fetchedPrompts, setFetchedPrompts] = useState<CampaignPrompts | null>(null);
   const [fetchingPrompts, setFetchingPrompts] = useState(false);
   const [launchingWebCall, setLaunchingWebCall] = useState(false);
+  const [loadingStage, setLoadingStage] = useState<'idle' | 'generating' | 'connecting'>('idle');
   const [showWebCallWidget, setShowWebCallWidget] = useState(false);
   const [webCallToken, setWebCallToken] = useState("");
   const [webCallId, setWebCallId] = useState("");
@@ -179,6 +180,8 @@ export function CampaignWizard({
    */
   const handleFetchPromptsAndTest = async (type: 'call' | 'whatsapp') => {
     try {
+      // Stage 1: Generating prompt
+      setLoadingStage('generating');
       setFetchingPrompts(true);
 
       // Get selected job
@@ -195,17 +198,17 @@ export function CampaignWizard({
       const objectives = convertMatricesToObjectives(matrices, targets);
 
       // Fetch prompts from webhook
-      toast.loading('Fetching AI prompts...');
+      toast.loading('🎨 Generating AI prompt...', { id: 'prompt-generation' });
       const prompts = await fetchCampaignPrompts(
         campaignName || 'Test Campaign',
         jobDescription,
         objectives
       );
 
-      toast.dismiss();
+      toast.dismiss('prompt-generation');
 
       if (!prompts) {
-        toast.error('Failed to fetch AI prompts. Using default scripts.');
+        toast.error('Failed to generate AI prompt. Using default scripts.');
         // Fall back to matrices
         if (type === 'call') {
           setShowCallTester(true);
@@ -214,6 +217,8 @@ export function CampaignWizard({
         }
         return;
       }
+
+      toast.success('✅ Prompt generated!');
 
       // Save prompts
       setFetchedPrompts(prompts);
@@ -225,18 +230,20 @@ export function CampaignWizard({
         console.log('🤖 Agent ID:', import.meta.env.VITE_RETELL_AGENT_ID);
         
         // ALWAYS launch web call, no fallback
-        toast.success('AI prompts loaded! Launching web call...');
         await handleLaunchWebCall(prompts);
       } else {
-        toast.success('AI prompts loaded!');
+        setLoadingStage('idle');
         setShowWhatsAppTester(true);
       }
 
     } catch (error) {
       console.error('Failed to fetch prompts:', error);
-      toast.error('Failed to fetch prompts. Cannot test without prompts.');
+      toast.error('Failed to generate prompt. Please try again.');
     } finally {
       setFetchingPrompts(false);
+      if (loadingStage !== 'connecting') {
+        setLoadingStage('idle');
+      }
     }
   };
 
@@ -245,6 +252,8 @@ export function CampaignWizard({
    */
   const handleLaunchWebCall = async (prompts: CampaignPrompts) => {
     try {
+      // Stage 2: Connecting to phone agent
+      setLoadingStage('connecting');
       setLaunchingWebCall(true);
       
       console.log('🌐 Creating Retell Web Call...');
@@ -252,12 +261,12 @@ export function CampaignWizard({
       console.log('  - agent_prompt:', prompts.prompt_call.substring(0, 100) + '...');
       console.log('  - first_message:', prompts.first_message_call);
 
-      toast.loading('Creating web call...');
+      toast.loading('📞 Loading phone agent...', { id: 'web-call-creation' });
 
       // Create web call with dynamic variables
       const result = await createRetellWebCall(prompts);
 
-      toast.dismiss();
+      toast.dismiss('web-call-creation');
 
       if (!result.success || !result.data) {
         throw new Error(result.error || 'Failed to create web call');
@@ -267,20 +276,21 @@ export function CampaignWizard({
       console.log('📞 Call ID:', result.data.call_id);
       console.log('🔑 Access Token:', result.data.access_token.substring(0, 20) + '...');
 
-      toast.success('Opening AI call widget...');
+      toast.success('✅ Phone agent ready!');
 
       // Open web call widget in-app
       setWebCallToken(result.data.access_token);
       setWebCallId(result.data.call_id);
       setShowWebCallWidget(true);
 
-      toast.success('Web call ready! Allow microphone and start talking.');
+      toast.success('🎤 Allow microphone and start talking');
 
     } catch (error) {
       console.error('❌ Failed to create web call:', error);
       toast.error(`Failed to launch web call: ${error instanceof Error ? error.message : 'Unknown error'}`);
     } finally {
       setLaunchingWebCall(false);
+      setLoadingStage('idle');
     }
   };
 
@@ -1108,8 +1118,22 @@ export function CampaignWizard({
                         className="flex-1"
                         disabled={fetchingPrompts || launchingWebCall || !linkJob}
                       >
-                        <PhoneIcon className="w-4 h-4 mr-2" />
-                        {launchingWebCall ? '🌐 Launching...' : fetchingPrompts ? 'Loading...' : 'Test Call Agent'}
+                        {loadingStage === 'generating' ? (
+                          <>
+                            <div className="w-4 h-4 mr-2 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+                            Generating prompt...
+                          </>
+                        ) : loadingStage === 'connecting' ? (
+                          <>
+                            <div className="w-4 h-4 mr-2 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+                            Loading phone agent...
+                          </>
+                        ) : (
+                          <>
+                            <PhoneIcon className="w-4 h-4 mr-2" />
+                            Test Call Agent
+                          </>
+                        )}
                       </Button>
                     )}
                     {selectedChannels.includes("WhatsApp") && (
