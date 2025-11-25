@@ -1,13 +1,16 @@
 import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
-import { jobsData, type Job } from "@/polymet/data/jobs-data";
-import { getCampaignsByJobId } from "@/polymet/data/campaigns-data";
+import { type Job } from "@/polymet/data/jobs-data";
+import { type Campaign } from "@/polymet/data/campaigns-data";
 import {
   loadJobs,
-  saveJobs,
   deleteJob as deleteJobFromStorage,
-} from "@/polymet/data/storage-manager";
+  addJob,
+} from "@/lib/supabase-storage";
+import { loadCampaigns } from "@/lib/supabase-storage";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/empty-state";
 import {
   PlusIcon,
   BriefcaseIcon,
@@ -32,19 +35,80 @@ import {
 
 export function JobsPage() {
   const [showJobDialog, setShowJobDialog] = useState(false);
-  const [jobs, setJobs] = useState(loadJobs(jobsData));
+  const [jobs, setJobs] = useState<Job[]>([]);
+  const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [deleteJobId, setDeleteJobId] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [deleting, setDeleting] = useState(false);
 
-  // Save jobs to storage whenever they change
+  // Load data from Supabase
   useEffect(() => {
-    saveJobs(jobs);
-  }, [jobs]);
+    fetchJobs();
+  }, []);
 
-  const handleDeleteJob = (jobId: string) => {
-    setJobs(jobs.filter((job) => job.id !== jobId));
-    deleteJobFromStorage(jobId);
+  async function fetchJobs() {
+    try {
+      setLoading(true);
+      const [loadedJobs, loadedCampaigns] = await Promise.all([
+        loadJobs(),
+        loadCampaigns(),
+      ]);
+      setJobs(loadedJobs);
+      setCampaigns(loadedCampaigns);
+    } catch (err) {
+      console.error('Failed to load jobs:', err);
+      toast.error('Failed to load jobs');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  const handleDeleteJob = async (jobId: string) => {
+    try {
+      setDeleting(true);
+      await deleteJobFromStorage(jobId);
+      await fetchJobs(); // Reload data
+      toast.success('Job deleted successfully');
     setDeleteJobId(null);
+    } catch (error) {
+      console.error('Failed to delete job:', error);
+      toast.error('Failed to delete job');
+    } finally {
+      setDeleting(false);
+    }
   };
+
+  const handleCreateJob = async (jobData: Omit<Job, 'id' | 'candidates'>) => {
+    try {
+      await addJob({
+        ...jobData,
+        candidates: [],
+      });
+      await fetchJobs(); // Reload data
+      toast.success('Job created successfully');
+      setShowJobDialog(false);
+    } catch (error) {
+      console.error('Failed to create job:', error);
+      toast.error('Failed to create job');
+    }
+  };
+
+  // Helper to get campaigns for a job
+  const getCampaignsByJobId = (jobId: string) => {
+    return campaigns.filter(c => c.jobId === jobId);
+  };
+
+  // Show loading state
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-screen">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mx-auto mb-4"></div>
+          <p className="text-muted-foreground">Loading jobs...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="p-8">
@@ -75,10 +139,27 @@ export function JobsPage() {
         </div>
       </div>
 
+      {/* Empty State */}
+      {jobs.length === 0 && (
+        <EmptyState
+          icon={BriefcaseIcon}
+          title="No jobs found"
+          description="Get started by creating your first job posting to begin recruiting candidates"
+          actionLabel="Create Your First Job"
+          onAction={() => setShowJobDialog(true)}
+        />
+      )}
+
       {/* Jobs Grid */}
+      {jobs.length > 0 && (
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         {jobs.map((job) => {
-          const progressPercentage = (job.hired / job.target) * 100;
+          // Calculate actual hired count from candidates
+          const actualHiredCount = job.candidates.filter(c => 
+            c.status === 'hired' || 
+            c.status === 'started-work'
+          ).length;
+          const progressPercentage = (actualHiredCount / job.target) * 100;
           const campaigns = getCampaignsByJobId(job.id);
           const activeCampaign = campaigns.find((c) => c.status === "active");
 
@@ -116,7 +197,7 @@ export function JobsPage() {
                   {/* Progress */}
                   <div>
                     <div className="flex items-center justify-between mb-2 text-sm">
-                      <span className="font-medium">{job.hired} Hired</span>
+                      <span className="font-medium">{actualHiredCount} Hired</span>
                       <span className="font-medium">{job.target} Target</span>
                     </div>
                     <Progress value={progressPercentage} className="h-2" />
@@ -186,19 +267,12 @@ export function JobsPage() {
           );
         })}
       </div>
+      )}
 
       <JobCreationDialog
         open={showJobDialog}
         onOpenChange={setShowJobDialog}
-        onSave={(jobData) => {
-          const newJob = {
-            ...jobData,
-            id: `job_${Date.now()}`,
-            candidates: [],
-          };
-          setJobs([...jobs, newJob]);
-          console.log("Job created:", newJob);
-        }}
+        onSave={handleCreateJob}
       />
 
       {/* Delete Confirmation Dialog */}
@@ -220,8 +294,9 @@ export function JobsPage() {
             <AlertDialogAction
               onClick={() => deleteJobId && handleDeleteJob(deleteJobId)}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              disabled={deleting}
             >
-              Delete Job
+              {deleting ? 'Deleting...' : 'Delete Job'}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

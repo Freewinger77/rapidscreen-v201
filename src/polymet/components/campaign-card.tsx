@@ -1,14 +1,39 @@
+import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
-import { ClockIcon, BriefcaseIcon, UsersIcon } from "lucide-react";
+import { ClockIcon, UsersIcon, BriefcaseIcon } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import type { Campaign } from "@/polymet/data/campaigns-data";
+import { calculateResponseRate } from "@/lib/calculate-response-rate";
 
 interface CampaignCardProps {
   campaign: Campaign;
 }
 
 export function CampaignCard({ campaign }: CampaignCardProps) {
+  const [responseRate, setResponseRate] = useState(campaign.responseRate || 0);
+
+  // Calculate response rate from backend
+  useEffect(() => {
+    async function loadResponseRate() {
+      try {
+        const backendId = (campaign as any).backendCampaignId;
+        if (backendId) {
+          const rate = await calculateResponseRate(backendId);
+          setResponseRate(rate);
+        }
+      } catch (error) {
+        console.error('Failed to calculate response rate:', error);
+      }
+    }
+
+    loadResponseRate();
+    
+    // Refresh every 30 seconds
+    const interval = setInterval(loadResponseRate, 30000);
+    return () => clearInterval(interval);
+  }, [campaign.id]);
+
   const getStatusColor = (status: Campaign["status"]) => {
     switch (status) {
       case "active":
@@ -45,41 +70,45 @@ export function CampaignCard({ campaign }: CampaignCardProps) {
       to={`/campaign/${campaign.id}`}
       className="block bg-card border border-border rounded-lg p-6 hover:border-primary/50 transition-colors"
     >
-      <div className="flex items-start justify-between mb-4">
-        <div className="flex-1">
-          <h3 className="text-lg font-semibold text-foreground mb-2">
-            {campaign.name}
-          </h3>
-          {/* Progress Bar */}
-          <div className="space-y-2">
-            <div className="flex items-center justify-between text-sm">
-              <span className="font-medium text-foreground">
-                Campaign End: {campaign.endDate}
-              </span>
+          <div className="flex items-start justify-between mb-4">
+            <div className="flex-1">
+              <h3 className="text-lg font-semibold text-foreground mb-2">
+                {campaign.name}
+              </h3>
+              {/* Progress Bar */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between text-sm">
+                  <span className="font-medium text-foreground">
+                    Campaign End: {campaign.endDate}
+                  </span>
+                </div>
+                <Progress
+                  value={
+                    isExpired
+                      ? 100
+                      : Math.min(
+                          ((new Date().getTime() -
+                            new Date(campaign.startDate).getTime()) /
+                            (new Date(campaign.endDate).getTime() -
+                              new Date(campaign.startDate).getTime())) *
+                            100,
+                          100
+                        )
+                  }
+                  className="h-2"
+                />
+              </div>
             </div>
-            <Progress
-              value={
-                isExpired
-                  ? 100
-                  : Math.min(
-                      ((new Date().getTime() -
-                        new Date(campaign.startDate).getTime()) /
-                        (new Date(campaign.endDate).getTime() -
-                          new Date(campaign.startDate).getTime())) *
-                        100,
-                      100
-                    )
-              }
-              className="h-2"
-            />
+            <Badge variant="outline" className={getStatusColor(campaign.status as any)}>
+              {campaign.status === "active" 
+                ? "● Active" 
+                : campaign.status === "completed" 
+                ? "Inactive" 
+                : campaign.status}
+            </Badge>
           </div>
-        </div>
-        <Badge variant="outline" className={getStatusColor(campaign.status)}>
-          {campaign.status === "active" ? "● Active" : campaign.status}
-        </Badge>
-      </div>
 
-      <div className="grid grid-cols-3 gap-4 mb-4">
+      <div className="grid grid-cols-2 gap-4 mb-4">
         <div className="space-y-1">
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
             <UsersIcon className="w-4 h-4" />
@@ -92,20 +121,11 @@ export function CampaignCard({ campaign }: CampaignCardProps) {
         </div>
 
         <div className="space-y-1">
-          <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <BriefcaseIcon className="w-4 h-4" />
-
-            <span>Hired</span>
-          </div>
-          <p className="text-2xl font-bold text-foreground">{campaign.hired}</p>
-        </div>
-
-        <div className="space-y-1">
           <p className="text-sm text-muted-foreground">Response Rate</p>
           <p
-            className={`text-2xl font-bold ${getResponseRateColor(campaign.responseRate)}`}
+            className={`text-2xl font-bold ${getResponseRateColor(responseRate)}`}
           >
-            {campaign.responseRate}%
+            {responseRate}%
           </p>
         </div>
       </div>

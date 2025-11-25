@@ -6,7 +6,17 @@ import { Input } from "@/components/ui/input";
 import { PlusIcon, SearchIcon } from "lucide-react";
 import type { Candidate, Job } from "@/polymet/data/jobs-data";
 import type { CampaignCandidate } from "@/polymet/data/campaigns-data";
-import { updateCandidates } from "@/polymet/data/storage-manager";
+import { updateCandidates, addCandidateToJob, updateJob } from "@/lib/supabase-storage";
+import { markAsManuallyMoved, syncJobCandidates } from "@/lib/smart-kanban-sync";
+import {
+  loadKanbanColumns,
+  addKanbanColumn,
+  updateKanbanColumn,
+  deleteKanbanColumn,
+  isHiredColumn,
+  type KanbanColumn,
+} from "@/lib/kanban-columns";
+import { toast } from "sonner";
 import {
   Dialog,
   DialogContent,
@@ -27,45 +37,71 @@ import {
 
 interface KanbanBoardProps {
   job: Job;
+  onUpdate?: () => void | Promise<void>;
+  onHiredCountChange?: (count: number) => void;
 }
 
-interface SwimlaneConfig {
-  id: string;
-  title: string;
-  status: Candidate["status"];
-  color: string;
-}
-
-const defaultSwimlanes: SwimlaneConfig[] = [
-  {
-    id: "1",
-    title: "Not Contacted",
-    status: "not-contacted",
-    color: "hsl(var(--chart-1))",
-  },
-  {
-    id: "2",
-    title: "Interested",
-    status: "interested",
-    color: "hsl(var(--chart-2))",
-  },
-  {
-    id: "3",
-    title: "Started Work",
-    status: "started-work",
-    color: "hsl(var(--primary))",
-  },
-];
-
-export function KanbanBoard({ job }: KanbanBoardProps) {
+export function KanbanBoard({ job, onUpdate, onHiredCountChange }: KanbanBoardProps) {
   const [candidates, setCandidates] = useState<Candidate[]>(job.candidates);
-  const [swimlanes, setSwimlanes] =
-    useState<SwimlaneConfig[]>(defaultSwimlanes);
+  const [swimlanes, setSwimlanes] = useState<KanbanColumn[]>([]);
+  const [loadingColumns, setLoadingColumns] = useState(true);
+  const [localHiredCount, setLocalHiredCount] = useState(job.hired);
 
-  // Persist candidates to storage whenever they change
+  // Load kanban columns from database
   useEffect(() => {
-    updateCandidates(job.id, candidates);
-  }, [candidates, job.id]);
+    async function fetchColumns() {
+      setLoadingColumns(true);
+      try {
+        const cols = await loadKanbanColumns(job.id);
+        setSwimlanes(cols);
+      } catch (error) {
+        console.error('Failed to load kanban columns:', error);
+      } finally {
+        setLoadingColumns(false);
+      }
+    }
+    
+    fetchColumns();
+  }, [job.id]);
+
+  // Sync local state with job prop
+  useEffect(() => {
+    setCandidates(job.candidates);
+  }, [job.candidates]);
+
+  // Auto-sync DISABLED - was moving candidates back automatically
+  // TODO: Re-enable with proper manual_override checking
+  /*
+  useEffect(() => {
+    async function autoSync() {
+      if (candidates.length === 0) return;
+      
+      const result = await syncJobCandidates(job.id, candidates);
+      
+      if (result.updated > 0) {
+        if (onUpdate) {
+          await onUpdate();
+        }
+      }
+    }
+
+    autoSync();
+    const interval = setInterval(autoSync, 30000);
+    return () => clearInterval(interval);
+  }, [job.id, candidates.length]);
+  */
+
+  // Persist candidates to database (background, no loading screen!)
+  async function persistCandidates(updatedCandidates: Candidate[]) {
+    try {
+      // Don't set saving state - no loading screen!
+      await updateCandidates(job.id, updatedCandidates);
+      // Don't call onUpdate here - prevents reload flash
+    } catch (error) {
+      console.error('Failed to save candidates:', error);
+      toast.error('Failed to save changes');
+    }
+  }
   const [searchQuery, setSearchQuery] = useState("");
   const [draggingId, setDraggingId] = useState<string | null>(null);
 
@@ -75,12 +111,13 @@ export function KanbanBoard({ job }: KanbanBoardProps) {
   const [newCandidatePhone, setNewCandidatePhone] = useState("");
   const [newCandidateStatus, setNewCandidateStatus] = useState<
     Candidate["status"]
-  >(defaultSwimlanes[0].status);
+  >("not-contacted");
 
   // New column dialog state
   const [isAddColumnOpen, setIsAddColumnOpen] = useState(false);
   const [newColumnTitle, setNewColumnTitle] = useState("");
   const [newColumnColor, setNewColumnColor] = useState("hsl(var(--chart-1))");
+  const [newColumnIsPostHire, setNewColumnIsPostHire] = useState(false);
 
   // Color options for columns
   const colorOptions = [
@@ -124,26 +161,69 @@ export function KanbanBoard({ job }: KanbanBoardProps) {
 
   // Handle note updates from candidate dialog
   const handleUpdateCandidateNotes = (candidateId: string, notes: any[]) => {
-    setCandidates((prev) => {
-      const updated = prev.map((candidate) =>
-        candidate.id === candidateId ? { ...candidate, notes } : candidate
-      );
-      // Data will be persisted by useEffect
-      return updated;
-    });
+    const updated = candidates.map((candidate) =>
+      candidate.id === candidateId ? { ...candidate, notes } : candidate
+    );
+    setCandidates(updated);
+    persistCandidates(updated);
   };
 
-  const handleDrop = (candidateId: string, newStatus: Candidate["status"]) => {
-    setCandidates((prev) => {
-      const updated = prev.map((candidate) =>
-        candidate.id === candidateId
-          ? { ...candidate, status: newStatus }
-          : candidate
-      );
-      // Data will be persisted by useEffect
-      return updated;
-    });
+  const handleDrop = async (candidateId: string, newStatus: Candidate["status"]) => {
+    const candidate = candidates.find(c => c.id === candidateId);
+    if (!candidate) return;
+
+    const oldStatus = candidate.status;
+    const oldColumn = swimlanes.find(s => s.statusKey === oldStatus);
+    const newColumn = swimlanes.find(s => s.statusKey === newStatus);
+
+    // Mark as manually moved (won't auto-sync)
+    markAsManuallyMoved(candidateId);
+    
+    // Optimistic update (instant UI)
+    const updated = candidates.map((c) =>
+      c.id === candidateId ? { ...c, status: newStatus } : c
+    );
+    setCandidates(updated);
     setDraggingId(null);
+
+    // Check if hired status changed
+    const wasHired = oldColumn && isHiredColumn(oldColumn);
+    const isNowHired = newColumn && isHiredColumn(newColumn);
+
+    try {
+      // Mark candidate as manually overridden
+      const candidateWithOverride = updated.map(c =>
+        c.id === candidateId ? { ...c, manual_override: true } : c
+      );
+
+      // Save to database in background
+      updateCandidates(job.id, candidateWithOverride).catch(err => {
+        console.error('Failed to save:', err);
+        toast.error('Failed to save changes');
+        setCandidates(candidates);
+      });
+
+      // Update hired count immediately
+      if (!wasHired && isNowHired) {
+        const newCount = localHiredCount + 1;
+        setLocalHiredCount(newCount);
+        if (onHiredCountChange) onHiredCountChange(newCount);
+        toast.success('Candidate marked as hired!');
+        // Update job in database (background)
+        updateJob(job.id, { hired: newCount });
+      } else if (wasHired && !isNowHired) {
+        const newCount = Math.max(0, localHiredCount - 1);
+        setLocalHiredCount(newCount);
+        if (onHiredCountChange) onHiredCountChange(newCount);
+        // Update job in database (background)  
+        updateJob(job.id, { hired: newCount });
+      }
+    } catch (error) {
+      // Revert on error
+      setCandidates(candidates);
+      console.error('Failed to move candidate:', error);
+      toast.error('Failed to move candidate');
+    }
   };
 
   const handleDragStart = (candidateId: string) => {
@@ -184,43 +264,76 @@ export function KanbanBoard({ job }: KanbanBoardProps) {
     });
   };
 
-  const handleAddCandidate = () => {
+  const handleAddCandidate = async () => {
     if (!newCandidateName || !newCandidatePhone) return;
 
-    const newCandidate: Candidate = {
-      id: `c${Date.now()}`,
-      name: newCandidateName,
-      phone: newCandidatePhone,
-      status: newCandidateStatus,
-    };
+    try {
+      const newCandidateId = await addCandidateToJob(job.id, {
+        name: newCandidateName,
+        phone: newCandidatePhone,
+        status: newCandidateStatus,
+        notes: [],
+      });
 
-    setCandidates((prev) => [...prev, newCandidate]);
+      toast.success('Candidate added successfully');
 
-    // Reset form
-    setNewCandidateName("");
-    setNewCandidatePhone("");
-    setNewCandidateStatus(swimlanes[0]?.status || "not-contacted");
-    setIsAddCandidateOpen(false);
+      // Reload job data
+      if (onUpdate) await onUpdate();
+
+      // Reset form
+      setNewCandidateName("");
+      setNewCandidatePhone("");
+      setNewCandidateStatus(swimlanes[0]?.status || "not-contacted");
+      setIsAddCandidateOpen(false);
+    } catch (error) {
+      console.error('Failed to add candidate:', error);
+      toast.error('Failed to add candidate');
+    }
   };
 
-  const handleAddColumn = () => {
+  const handleAddColumn = async () => {
     if (!newColumnTitle.trim()) return;
 
     const newStatus = `custom-${Date.now()}` as Candidate["status"];
-    const newSwimlane: SwimlaneConfig = {
-      id: `swimlane-${Date.now()}`,
+    const newColumn: Omit<KanbanColumn, 'id'> = {
+      jobId: job.id,
       title: newColumnTitle.trim(),
-      status: newStatus,
+      statusKey: newStatus,
       color: newColumnColor,
+      position: swimlanes.length,
+      isDefault: false,
+      isPostHire: newColumnIsPostHire,
     };
 
-    setSwimlanes((prev) => [...prev, newSwimlane]);
-    setNewColumnTitle("");
-    setNewColumnColor("hsl(var(--chart-1))");
-    setIsAddColumnOpen(false);
+    try {
+      // Optimistic update
+      const tempColumn = { ...newColumn, id: `temp-${Date.now()}` };
+      setSwimlanes((prev) => [...prev, tempColumn]);
+      setNewColumnTitle("");
+      setNewColumnColor("hsl(var(--chart-1))");
+      setNewColumnIsPostHire(false);
+      setIsAddColumnOpen(false);
+
+      // Save to database
+      const savedColumn = await addKanbanColumn(newColumn);
+      
+      // Update with real ID
+      setSwimlanes((prev) =>
+        prev.map((s) => (s.id === tempColumn.id ? savedColumn : s))
+      );
+
+      toast.success('Column created');
+    } catch (error) {
+      console.error('Failed to add column:', error);
+      toast.error('Failed to create column');
+      // Revert
+      setSwimlanes((prev) => prev.filter((s) => s.id !== `temp-${Date.now()}`));
+    }
   };
 
-  const handleEditColumn = (id: string, newTitle: string, newColor: string) => {
+  const handleEditColumn = async (id: string, newTitle: string, newColor: string) => {
+    // Optimistic update
+    const oldSwimlanes = [...swimlanes];
     setSwimlanes((prev) =>
       prev.map((swimlane) =>
         swimlane.id === id
@@ -228,6 +341,17 @@ export function KanbanBoard({ job }: KanbanBoardProps) {
           : swimlane
       )
     );
+
+    try {
+      // Save to database
+      await updateKanbanColumn(id, { title: newTitle, color: newColor });
+      toast.success('Column updated');
+    } catch (error) {
+      console.error('Failed to update column:', error);
+      toast.error('Failed to update column');
+      // Revert
+      setSwimlanes(oldSwimlanes);
+    }
   };
 
   const handleDeleteColumn = () => {
@@ -372,7 +496,7 @@ export function KanbanBoard({ job }: KanbanBoardProps) {
                     </SelectTrigger>
                     <SelectContent>
                       {swimlanes.map((swimlane) => (
-                        <SelectItem key={swimlane.id} value={swimlane.status}>
+                        <SelectItem key={swimlane.id} value={swimlane.statusKey}>
                           <div className="flex items-center gap-2">
                             <div
                               className="w-3 h-3 rounded-full"
@@ -402,28 +526,36 @@ export function KanbanBoard({ job }: KanbanBoardProps) {
       </div>
 
       {/* Kanban Board */}
-      <div className="flex gap-4 overflow-x-auto pb-4">
-        {swimlanes.map((swimlane) => (
-          <Swimlane
-            key={swimlane.id}
-            id={swimlane.id}
-            title={swimlane.title}
-            candidates={getCandidatesByStatus(swimlane.status)}
-            status={swimlane.status}
-            color={swimlane.color}
-            onDrop={handleDrop}
-            onDragStart={handleDragStart}
-            onEdit={handleEditColumn}
-            onDelete={initiateDeleteColumn}
-            canDelete={swimlanes.length > 1}
-            onCandidateClick={handleCandidateClick}
-            onReorder={handleReorder}
-          />
-        ))}
+      {loadingColumns ? (
+        <div className="flex items-center justify-center py-12">
+          <div className="text-center">
+            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto mb-2"></div>
+            <p className="text-sm text-muted-foreground">Loading board...</p>
+          </div>
+        </div>
+      ) : (
+        <div className="flex gap-4 overflow-x-auto pb-4">
+          {swimlanes.map((swimlane) => (
+            <Swimlane
+              key={swimlane.id}
+              id={swimlane.id}
+              title={swimlane.title}
+              candidates={getCandidatesByStatus(swimlane.statusKey as Candidate["status"])}
+              status={swimlane.statusKey as Candidate["status"]}
+              color={swimlane.color}
+              onDrop={handleDrop}
+              onDragStart={handleDragStart}
+              onEdit={handleEditColumn}
+              onDelete={initiateDeleteColumn}
+              canDelete={swimlanes.length > 1}
+              onCandidateClick={handleCandidateClick}
+              onReorder={handleReorder}
+            />
+          ))}
 
-        {/* Add Column Button */}
-        <div className="flex-shrink-0 min-w-[280px]">
-          <Dialog open={isAddColumnOpen} onOpenChange={setIsAddColumnOpen}>
+          {/* Add Column Button */}
+          <div className="flex-shrink-0 min-w-[280px]">
+            <Dialog open={isAddColumnOpen} onOpenChange={setIsAddColumnOpen}>
             <DialogTrigger asChild>
               <Button
                 variant="outline"
@@ -471,6 +603,18 @@ export function KanbanBoard({ job }: KanbanBoardProps) {
                     ))}
                   </div>
                 </div>
+                <div className="flex items-center space-x-2">
+                  <input
+                    type="checkbox"
+                    id="postHire"
+                    checked={newColumnIsPostHire}
+                    onChange={(e) => setNewColumnIsPostHire(e.target.checked)}
+                    className="w-4 h-4 rounded border-input"
+                  />
+                  <label htmlFor="postHire" className="text-sm">
+                    Post-hire column (counts toward hired total)
+                  </label>
+                </div>
               </div>
               <DialogFooter>
                 <Button
@@ -483,8 +627,9 @@ export function KanbanBoard({ job }: KanbanBoardProps) {
               </DialogFooter>
             </DialogContent>
           </Dialog>
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Delete Column Dialog */}
       <Dialog open={isDeleteColumnOpen} onOpenChange={setIsDeleteColumnOpen}>

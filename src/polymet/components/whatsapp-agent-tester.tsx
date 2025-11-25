@@ -15,6 +15,7 @@ interface WhatsAppAgentTesterProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   whatsappMessage: string;
+  agentPrompt?: string;
 }
 
 type Message = {
@@ -29,6 +30,7 @@ export function WhatsAppAgentTester({
   open,
   onOpenChange,
   whatsappMessage,
+  agentPrompt,
 }: WhatsAppAgentTesterProps) {
   useZoomDialog();
   const [messages, setMessages] = useState<Message[]>([]);
@@ -152,10 +154,13 @@ export function WhatsAppAgentTester({
             <div className="w-10 h-10 rounded-full bg-muted flex items-center justify-center text-sm font-medium">
               AI
             </div>
-            <div>
+            <div className="flex-1">
               <DialogTitle className="text-white text-base">
                 Recruitment Agent
               </DialogTitle>
+              {agentPrompt && (
+                <p className="text-xs text-white/70 mt-1">Using live AI prompt</p>
+              )}
               <p className="text-xs text-white/80">
                 {isTyping ? "typing..." : "Online"}
               </p>

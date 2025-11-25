@@ -1,7 +1,8 @@
 import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { loadDatasets, addDataset } from "@/polymet/data/storage-manager";
+import { EmptyState } from "@/components/ui/empty-state";
+import { loadDatasets, addDataset } from "@/lib/supabase-storage";
 import {
   SearchIcon,
   PlusIcon,
@@ -9,8 +10,10 @@ import {
   CalendarIcon,
   FileTextIcon,
   MoreVerticalIcon,
+  DatabaseIcon,
 } from "lucide-react";
-import { datasetsData, type Dataset } from "@/polymet/data/datasets-data";
+import { type Dataset } from "@/polymet/data/datasets-data";
+import { toast } from "sonner";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -25,12 +28,26 @@ export function DatasetsPage() {
   const [selectedDataset, setSelectedDataset] = useState<Dataset | null>(null);
   const [detailDialogOpen, setDetailDialogOpen] = useState(false);
   const [uploadDialogOpen, setUploadDialogOpen] = useState(false);
-  const [datasets, setDatasets] = useState(loadDatasets(datasetsData));
+  const [datasets, setDatasets] = useState<Dataset[]>([]);
+  const [loading, setLoading] = useState(true);
 
-  // Reload datasets when component mounts
+  // Load datasets from Supabase
   useEffect(() => {
-    setDatasets(loadDatasets(datasetsData));
+    fetchDatasets();
   }, []);
+
+  async function fetchDatasets() {
+    try {
+      setLoading(true);
+      const loadedDatasets = await loadDatasets();
+      setDatasets(loadedDatasets);
+    } catch (err) {
+      console.error('Failed to load datasets:', err);
+      toast.error('Failed to load datasets');
+    } finally {
+      setLoading(false);
+    }
+  }
 
   const filteredDatasets = datasets.filter(
     (dataset) =>
@@ -50,6 +67,18 @@ export function DatasetsPage() {
         return "bg-muted text-muted-foreground";
     }
   };
+
+  // Show loading state
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-screen">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mx-auto mb-4"></div>
+          <p className="text-muted-foreground">Loading datasets...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="p-8 space-y-6">
@@ -215,19 +244,15 @@ export function DatasetsPage() {
         ))}
       </div>
 
+      {/* Empty State */}
       {filteredDatasets.length === 0 && (
-        <div className="text-center py-12">
-          <FileTextIcon className="w-12 h-12 mx-auto mb-4 text-muted-foreground" />
-
-          <h3 className="text-lg font-semibold mb-2">No datasets found</h3>
-          <p className="text-muted-foreground mb-4">
-            Try adjusting your search or create a new dataset
-          </p>
-          <Button onClick={() => setUploadDialogOpen(true)}>
-            <PlusIcon className="w-4 h-4 mr-2" />
-            Create New Dataset
-          </Button>
-        </div>
+        <EmptyState
+          icon={DatabaseIcon}
+          title="No datasets found"
+          description={search ? "Try adjusting your search or create a new dataset" : "Create your first dataset to build a pool of candidates for your campaigns"}
+          actionLabel={datasets.length === 0 ? "Create Your First Dataset" : "Create New Dataset"}
+          onAction={() => setUploadDialogOpen(true)}
+        />
       )}
 
       {/* Dialogs */}
@@ -240,20 +265,52 @@ export function DatasetsPage() {
       <CSVUploadDialog
         open={uploadDialogOpen}
         onOpenChange={setUploadDialogOpen}
-        onComplete={(data) => {
-          console.log("Dataset created:", data);
-          // Save to storage and update state
-          const newDataset = {
-            id: `dataset-${Date.now()}`,
-            name: data.name,
-            description: `Imported from CSV with ${data.data.length} candidates`,
-            source: "csv" as const,
-            candidateCount: data.data.length,
-            lastUpdated: "Just now",
-            candidates: data.data,
-          };
-          addDataset(newDataset);
-          setDatasets(loadDatasets(datasetsData));
+        onComplete={async (data) => {
+          try {
+            console.log("Dataset created:", data);
+            console.log("CSV Data:", data.data);
+            console.log("Column Mapping:", data.mapping);
+            
+            // Transform CSV data to proper candidate format
+            const transformedCandidates = data.data.map((row: any, index: number) => {
+              // Map CSV columns to our schema
+              const phone = row.number || row.phone || row.Phone || row.Number || row.mobile || '';
+              const name = row.name || row.Name || row.full_name || row.fullName || `Candidate ${index + 1}`;
+              
+              return {
+                id: `csv_${Date.now()}_${index}`,
+                name: name.trim(),
+                phone: phone.trim(),
+                postcode: row.postcode || row.Postcode || null,
+                location: row.location || row.Location || null,
+                trade: row.trade || row.Trade || row.skill || row.Skill || null,
+                blueCard: row.blue_card === 'true' || row.blueCard === 'true' || row.BlueCard === 'true' || false,
+                greenCard: row.green_card === 'true' || row.greenCard === 'true' || row.GreenCard === 'true' || false,
+              };
+            });
+            
+            console.log("Transformed candidates:", transformedCandidates);
+            
+            // Save to database
+            await addDataset({
+              name: data.name,
+              description: `Imported from CSV with ${transformedCandidates.length} candidates`,
+              source: "csv" as const,
+              candidateCount: transformedCandidates.length,
+              createdAt: new Date().toISOString(),
+              lastUpdated: new Date().toISOString(),
+              candidates: transformedCandidates,
+            });
+            
+            // Reload datasets
+            await fetchDatasets();
+            
+            toast.success('Dataset created successfully!');
+            setUploadDialogOpen(false);
+          } catch (error) {
+            console.error('Failed to create dataset:', error);
+            toast.error('Failed to create dataset');
+          }
         }}
       />
     </div>

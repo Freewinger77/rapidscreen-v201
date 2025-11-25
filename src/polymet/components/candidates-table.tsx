@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import {
@@ -19,15 +19,18 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { EyeIcon, Trash2Icon, ArrowUpDownIcon } from "lucide-react";
 import type { CampaignCandidate } from "@/polymet/data/campaigns-data";
+import { getCampaignInfo, getSessionByPhone } from "@/lib/backend-api";
 
 interface CandidatesTableProps {
   candidates: CampaignCandidate[];
+  campaignName: string;  // Backend campaign ID
   onViewTranscript: (candidate: CampaignCandidate) => void;
   onDeleteCandidate: (candidateId: string) => void;
 }
 
 export function CandidatesTable({
   candidates,
+  campaignName,
   onViewTranscript,
   onDeleteCandidate,
 }: CandidatesTableProps) {
@@ -37,6 +40,54 @@ export function CandidatesTable({
   const [refereeFilter, setRefereeFilter] = useState<string>("all");
   const [sortField, setSortField] = useState<string>("forename");
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
+  const [campaignObjectives, setCampaignObjectives] = useState<any>(null);
+  const [candidateSessions, setCandidateSessions] = useState<Map<string, any>>(new Map());
+
+  // Load campaign objectives from backend
+  useEffect(() => {
+    async function loadCampaignInfo() {
+      if (!campaignName) return;
+      
+      try {
+        const info = await getCampaignInfo(campaignName);
+        if (info?.objectives_template) {
+          setCampaignObjectives(info.objectives_template);
+        }
+      } catch (error) {
+        console.error('Failed to load campaign objectives:', error);
+      }
+    }
+    
+    loadCampaignInfo();
+  }, [campaignName]);
+
+  // Load session info for each candidate
+  useEffect(() => {
+    async function loadSessions() {
+      if (candidates.length === 0) return;
+      
+      const sessionMap = new Map();
+      
+      for (const candidate of candidates) {
+        try {
+          const session = await getSessionByPhone(candidate.telMobile);
+          if (session) {
+            sessionMap.set(candidate.telMobile, session);
+          }
+        } catch (error) {
+          console.error(`Failed to load session for ${candidate.telMobile}:`, error);
+        }
+      }
+      
+      setCandidateSessions(sessionMap);
+    }
+    
+    loadSessions();
+    
+    // Refresh every 30 seconds
+    const interval = setInterval(loadSessions, 30000);
+    return () => clearInterval(interval);
+  }, [candidates]);
 
   const getCallStatusLabel = (status: CampaignCandidate["callStatus"]) => {
     const statusMap = {
@@ -225,43 +276,66 @@ export function CandidatesTable({
                   onClick={() => handleSort("callStatus")}
                   className="h-8 px-2 hover:bg-muted/50"
                 >
-                  Call Status
+                  Status
                   <ArrowUpDownIcon className="ml-2 h-3 w-3" />
                 </Button>
               </TableHead>
-              <TableHead>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => handleSort("availableToWork")}
-                  className="h-8 px-2 hover:bg-muted/50"
-                >
-                  Available to Work
-                  <ArrowUpDownIcon className="ml-2 h-3 w-3" />
-                </Button>
-              </TableHead>
-              <TableHead>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => handleSort("interested")}
-                  className="h-8 px-2 hover:bg-muted/50"
-                >
-                  Interested
-                  <ArrowUpDownIcon className="ml-2 h-3 w-3" />
-                </Button>
-              </TableHead>
-              <TableHead>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => handleSort("knowReferee")}
-                  className="h-8 px-2 hover:bg-muted/50"
-                >
-                  Know Referee
-                  <ArrowUpDownIcon className="ml-2 h-3 w-3" />
-                </Button>
-              </TableHead>
+              {/* Dynamic objective columns from backend */}
+              {campaignObjectives ? (
+                Object.entries(campaignObjectives).map(([key, config]: [string, any]) => {
+                  if (config.type === 'boolean') {
+                    return (
+                      <TableHead key={key}>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-8 px-2 hover:bg-muted/50 capitalize"
+                        >
+                          {key.replace(/_/g, ' ')}
+                          <ArrowUpDownIcon className="ml-2 h-3 w-3" />
+                        </Button>
+                      </TableHead>
+                    );
+                  }
+                  return null;
+                })
+              ) : (
+                <>
+                  <TableHead>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => handleSort("availableToWork")}
+                      className="h-8 px-2 hover:bg-muted/50"
+                    >
+                      Available to Work
+                      <ArrowUpDownIcon className="ml-2 h-3 w-3" />
+                    </Button>
+                  </TableHead>
+                  <TableHead>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => handleSort("interested")}
+                      className="h-8 px-2 hover:bg-muted/50"
+                    >
+                      Interested
+                      <ArrowUpDownIcon className="ml-2 h-3 w-3" />
+                    </Button>
+                  </TableHead>
+                  <TableHead>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => handleSort("knowReferee")}
+                      className="h-8 px-2 hover:bg-muted/50"
+                    >
+                      Know Referee
+                      <ArrowUpDownIcon className="ml-2 h-3 w-3" />
+                    </Button>
+                  </TableHead>
+                </>
+              )}
               <TableHead className="text-right">Actions</TableHead>
             </TableRow>
           </TableHeader>
@@ -288,23 +362,53 @@ export function CandidatesTable({
                     {candidate.telMobile}
                   </TableCell>
                   <TableCell>
-                    <Badge
-                      variant={"secondary"}
-                      className="text-xs"
-                      style={getCallStatusStyle(candidate.callStatus)}
-                    >
-                      {getCallStatusLabel(candidate.callStatus)}
-                    </Badge>
+                    {(() => {
+                      const session = candidateSessions.get(candidate.telMobile);
+                      const status = session?.session_status || 'not_contacted';
+                      const isActive = status === 'active';
+                      
+                      return (
+                        <div className="flex items-center gap-2">
+                          {isActive && (
+                            <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
+                          )}
+                          <Badge
+                            variant={isActive ? "default" : "secondary"}
+                            className="text-xs capitalize"
+                          >
+                            {status.replace('_', ' ')}
+                          </Badge>
+                        </div>
+                      );
+                    })()}
                   </TableCell>
-                  <TableCell>
-                    {getBooleanDisplay(candidate.availableToWork)}
-                  </TableCell>
-                  <TableCell>
-                    {getBooleanDisplay(candidate.interested)}
-                  </TableCell>
-                  <TableCell>
-                    {getBooleanDisplay(candidate.knowReferee)}
-                  </TableCell>
+                  {/* Dynamic objective columns from backend */}
+                  {campaignObjectives ? (
+                    Object.entries(campaignObjectives).map(([key, config]: [string, any]) => {
+                      if (config.type === 'boolean') {
+                        const session = candidateSessions.get(candidate.telMobile);
+                        const value = session?.objectives?.[key] ?? null;
+                        return (
+                          <TableCell key={key}>
+                            {getBooleanDisplay(value)}
+                          </TableCell>
+                        );
+                      }
+                      return null;
+                    })
+                  ) : (
+                    <>
+                      <TableCell>
+                        {getBooleanDisplay(candidate.availableToWork)}
+                      </TableCell>
+                      <TableCell>
+                        {getBooleanDisplay(candidate.interested)}
+                      </TableCell>
+                      <TableCell>
+                        {getBooleanDisplay(candidate.knowReferee)}
+                      </TableCell>
+                    </>
+                  )}
                   <TableCell className="text-right">
                     <div className="flex items-center justify-end gap-2">
                       <Button
@@ -312,7 +416,7 @@ export function CandidatesTable({
                         size="icon"
                         className="h-8 w-8"
                         onClick={() => onViewTranscript(candidate)}
-                        disabled={candidate.calls.length === 0}
+                        title="View Conversation & Timeline"
                       >
                         <EyeIcon className="w-4 h-4" />
                       </Button>
@@ -332,6 +436,7 @@ export function CandidatesTable({
           </TableBody>
         </Table>
       </div>
+
     </div>
   );
 }

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useZoomDialog } from "@/polymet/components/animated-dialog";
 import {
   Dialog,
@@ -36,15 +36,33 @@ import {
 } from "lucide-react";
 import { format } from "date-fns";
 import { cn } from "@/lib/utils";
-import { jobsData } from "@/polymet/data/jobs-data";
+import { type Job } from "@/polymet/data/jobs-data";
+import { loadJobs, loadDatasets, addDataset } from "@/lib/supabase-storage";
+import {
+  launchCampaign,
+  buildJobDescription,
+  convertMatricesToObjectives,
+} from "@/lib/campaign-webhook";
+import {
+  fetchCampaignPrompts,
+  type CampaignPrompts,
+} from "@/lib/campaign-prompts";
+import {
+  createRetellWebCall,
+  openRetellWebCall,
+  isRetellWebCallConfigured,
+} from "@/lib/retell-web-call";
+import { toast } from "sonner";
 import type {
   CampaignTarget,
   CampaignMatrix,
 } from "@/polymet/data/campaigns-data";
+import type { Dataset } from "@/polymet/data/datasets-data";
 import { Textarea } from "@/components/ui/textarea";
 import { WhatsAppPreview } from "@/polymet/components/whatsapp-preview";
 import { DatasetSelectorDialog } from "@/polymet/components/dataset-selector-dialog";
-import { CallAgentTester } from "@/polymet/components/call-agent-tester";
+import { CSVUploadDialog } from "@/polymet/components/csv-upload-dialog";
+import { RetellWebCallWidget } from "@/polymet/components/retell-web-call-widget";
 import { WhatsAppAgentTester } from "@/polymet/components/whatsapp-agent-tester";
 import {
   Card,
@@ -73,9 +91,30 @@ export function CampaignWizard({
   const [startDate, setStartDate] = useState<Date>();
   const [endDate, setEndDate] = useState<Date>();
   const [selectedChannels, setSelectedChannels] = useState<string[]>([]);
-  const [uploadMethod, setUploadMethod] = useState<"csv" | "existing">(
-    "existing"
-  );
+  const [jobs, setJobs] = useState<Job[]>([]);
+  const [datasets, setDatasets] = useState<Dataset[]>([]);
+  const [launching, setLaunching] = useState(false);
+
+  // Load jobs and datasets from Supabase
+  useEffect(() => {
+    async function fetchData() {
+      try {
+        const [loadedJobs, loadedDatasets] = await Promise.all([
+          loadJobs(),
+          loadDatasets(),
+        ]);
+        setJobs(loadedJobs);
+        setDatasets(loadedDatasets);
+      } catch (error) {
+        console.error('Failed to load data:', error);
+        toast.error('Failed to load jobs and datasets');
+      }
+    }
+
+    if (open) {
+      fetchData();
+    }
+  }, [open]);
   const [targets, setTargets] = useState<CampaignTarget[]>([
     {
       id: "t1",
@@ -116,10 +155,16 @@ export function CampaignWizard({
   const [showAddMatrix, setShowAddMatrix] = useState(false);
   const [editingMatrix, setEditingMatrix] = useState<string | null>(null);
   const [showDatasetSelector, setShowDatasetSelector] = useState(false);
+  const [showCSVUpload, setShowCSVUpload] = useState(false);
   const [selectedDatasetIds, setSelectedDatasetIds] = useState<string[]>([]);
-  const [showCallTester, setShowCallTester] = useState(false);
   const [showWhatsAppTester, setShowWhatsAppTester] = useState(false);
   const [showLaunchConfirmation, setShowLaunchConfirmation] = useState(false);
+  const [fetchedPrompts, setFetchedPrompts] = useState<CampaignPrompts | null>(null);
+  const [fetchingPrompts, setFetchingPrompts] = useState(false);
+  const [launchingWebCall, setLaunchingWebCall] = useState(false);
+  const [showWebCallWidget, setShowWebCallWidget] = useState(false);
+  const [webCallToken, setWebCallToken] = useState("");
+  const [webCallId, setWebCallId] = useState("");
 
   const toggleChannel = (channel: string) => {
     setSelectedChannels((prev) =>
@@ -127,6 +172,116 @@ export function CampaignWizard({
         ? prev.filter((c) => c !== channel)
         : [...prev, channel]
     );
+  };
+
+  /**
+   * Fetch AI prompts before testing agents
+   */
+  const handleFetchPromptsAndTest = async (type: 'call' | 'whatsapp') => {
+    try {
+      setFetchingPrompts(true);
+
+      // Get selected job
+      const selectedJob = jobs.find(j => j.id === linkJob);
+      if (!selectedJob) {
+        toast.error('Please select a job first');
+        return;
+      }
+
+      // Build job description
+      const jobDescription = buildJobDescription(selectedJob);
+
+      // Build objectives
+      const objectives = convertMatricesToObjectives(matrices, targets);
+
+      // Fetch prompts from webhook
+      toast.loading('Fetching AI prompts...');
+      const prompts = await fetchCampaignPrompts(
+        campaignName || 'Test Campaign',
+        jobDescription,
+        objectives
+      );
+
+      toast.dismiss();
+
+      if (!prompts) {
+        toast.error('Failed to fetch AI prompts. Using default scripts.');
+        // Fall back to matrices
+        if (type === 'call') {
+          setShowCallTester(true);
+        } else {
+          setShowWhatsAppTester(true);
+        }
+        return;
+      }
+
+      // Save prompts
+      setFetchedPrompts(prompts);
+      
+      // For call, launch web call immediately (NO SIMULATOR!)
+      if (type === 'call') {
+        console.log('🔍 Retell configured?', isRetellWebCallConfigured());
+        console.log('🔑 API Key:', import.meta.env.VITE_RETELL_API_KEY);
+        console.log('🤖 Agent ID:', import.meta.env.VITE_RETELL_AGENT_ID);
+        
+        // ALWAYS launch web call, no fallback
+        toast.success('AI prompts loaded! Launching web call...');
+        await handleLaunchWebCall(prompts);
+      } else {
+        toast.success('AI prompts loaded!');
+        setShowWhatsAppTester(true);
+      }
+
+    } catch (error) {
+      console.error('Failed to fetch prompts:', error);
+      toast.error('Failed to fetch prompts. Cannot test without prompts.');
+    } finally {
+      setFetchingPrompts(false);
+    }
+  };
+
+  /**
+   * Launch Retell Web Call in browser
+   */
+  const handleLaunchWebCall = async (prompts: CampaignPrompts) => {
+    try {
+      setLaunchingWebCall(true);
+      
+      console.log('🌐 Creating Retell Web Call...');
+      console.log('📝 Dynamic Variables:');
+      console.log('  - agent_prompt:', prompts.prompt_call.substring(0, 100) + '...');
+      console.log('  - first_message:', prompts.first_message_call);
+
+      toast.loading('Creating web call...');
+
+      // Create web call with dynamic variables
+      const result = await createRetellWebCall(prompts);
+
+      toast.dismiss();
+
+      if (!result.success || !result.data) {
+        throw new Error(result.error || 'Failed to create web call');
+      }
+
+      console.log('✅ Web call created!');
+      console.log('📞 Call ID:', result.data.call_id);
+      console.log('🔑 Access Token:', result.data.access_token.substring(0, 20) + '...');
+
+      toast.success('Opening AI call widget...');
+
+      // Open web call widget in-app
+      setWebCallToken(result.data.access_token);
+      setWebCallId(result.data.call_id);
+      setShowWebCallWidget(true);
+
+      toast.success('Web call ready! Allow microphone and start talking.');
+
+    } catch (error) {
+      console.error('❌ Failed to create web call:', error);
+      toast.error(`Failed to launch web call: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    } finally {
+      setLaunchingWebCall(false);
+    }
   };
 
   const addTarget = () => {
@@ -189,54 +344,136 @@ export function CampaignWizard({
     }
   };
 
-  const handleLaunchCampaign = () => {
-    // Complete campaign creation
-    const campaignData = {
-      name: campaignName,
-      linkJob,
-      startDate: startDate?.toISOString(),
-      endDate: endDate?.toISOString(),
-      channels: selectedChannels,
-      targets,
-      matrices,
-    };
-    onComplete?.(campaignData);
-    setShowLaunchConfirmation(false);
-    onOpenChange(false);
-    // Reset form
-    setStep(1);
-    setCampaignName("");
-    setLinkJob("");
-    setStartDate(undefined);
-    setEndDate(undefined);
-    setSelectedChannels([]);
-    setTargets([
-      {
-        id: "t1",
-        name: "Available to Work",
-        type: "column",
-        description: "Check if candidate is available to work",
-        goalType: "boolean",
-      },
-      {
-        id: "t2",
-        name: "Interested",
-        type: "column",
-        description: "Assess candidate interest level",
-        goalType: "boolean",
-      },
-    ]);
-    setMatrices([
-      {
-        id: "m1",
-        name: "Initial Outreach",
-        description: "First contact with candidate",
-        whatsappMessage:
-          "Hi! We have an exciting opportunity for a Steel Fixer position at Hinkley Point C. Are you interested?",
-        callScript:
-          "Hi, this is James from Nucleo Talent. We're hiring steel fixers for Hinkley Point C. Interested?",
-      },
-    ]);
+  const handleLaunchCampaign = async () => {
+    try {
+      setLaunching(true);
+
+      // Get selected job details
+      const selectedJob = jobs.find(j => j.id === linkJob);
+      if (!selectedJob) {
+        toast.error('Please select a job');
+        return;
+      }
+
+      // Get candidates from selected datasets
+      const selectedDatasets = datasets.filter(ds => selectedDatasetIds.includes(ds.id));
+      const allCandidates = selectedDatasets.flatMap(ds => 
+        ds.candidates.map(c => ({
+          phone: c.phone,
+          name: c.name,
+        }))
+      );
+
+      if (allCandidates.length === 0) {
+        toast.error('No candidates selected. Please select at least one dataset.');
+        return;
+      }
+
+      // Build job description
+      const jobDescription = buildJobDescription(selectedJob);
+
+      // Convert targets to webhook objectives
+      const objectives = convertMatricesToObjectives(matrices, targets);
+
+      // Launch campaign via webhook
+      console.log('🚀 Launching campaign:', campaignName);
+      const webhookResult = await launchCampaign({
+        campaignName,
+        candidates: allCandidates,
+        jobDescription,
+        objectives,
+      });
+
+      if (!webhookResult.success) {
+        throw new Error(webhookResult.error || 'Failed to launch campaign');
+      }
+
+      console.log('✅ Webhook launched successfully:', webhookResult.campaignId);
+
+      // Convert candidates to campaign candidate format
+      const campaignCandidates = allCandidates.map((candidate, index) => ({
+        id: `cc_${Date.now()}_${index}`,
+        forename: candidate.name?.split(' ')[0] || 'Unknown',
+        surname: candidate.name?.split(' ').slice(1).join(' ') || '',
+        telMobile: candidate.phone,
+        email: undefined,
+        callStatus: 'not_called' as const,
+        availableToWork: null,
+        interested: null,
+        knowReferee: null,
+        lastContact: undefined,
+        experience: undefined,
+        calls: [],
+        whatsappMessages: [],
+        notes: [],
+      }));
+
+      // Complete campaign creation with the full campaign ID (includes UID)
+      const campaignData = {
+        campaignId: webhookResult.campaignId,  // Full ID from backend! (e.g., "ad_mid8vd4rlbh5i3xx5j")
+        name: campaignName,  // Display name (e.g., "ad")
+        jobId: linkJob,
+        jobTitle: selectedJob.title,
+        linkJob: selectedJob.title,
+        startDate: startDate?.toISOString().split('T')[0] || new Date().toISOString().split('T')[0],
+        endDate: endDate?.toISOString().split('T')[0] || new Date().toISOString().split('T')[0],
+        channels: selectedChannels as ("WhatsApp" | "Call" | "Email")[],
+        targets,
+        matrices,
+        totalCandidates: allCandidates.length,
+        hired: 0,
+        responseRate: 0,
+        candidates: campaignCandidates,  // Add candidates!
+      };
+
+      console.log('📝 Campaign data to save:', campaignData);
+      console.log('🔑 Campaign ID with UID:', webhookResult.campaignId);
+
+      onComplete?.(campaignData);
+      
+      toast.success(`Campaign launched! ${allCandidates.length} candidates will be contacted.`);
+      setShowLaunchConfirmation(false);
+      onOpenChange(false);
+      // Reset form
+      setStep(1);
+      setCampaignName("");
+      setLinkJob("");
+      setStartDate(undefined);
+      setEndDate(undefined);
+      setSelectedChannels([]);
+      setTargets([
+        {
+          id: "t1",
+          name: "Available to Work",
+          type: "column",
+          description: "Check if candidate is available to work",
+          goalType: "boolean",
+        },
+        {
+          id: "t2",
+          name: "Interested",
+          type: "column",
+          description: "Assess candidate interest level",
+          goalType: "boolean",
+        },
+      ]);
+      setMatrices([
+        {
+          id: "m1",
+          name: "Initial Outreach",
+          description: "First contact with candidate",
+          whatsappMessage:
+            "Hi! We have an exciting opportunity for a Steel Fixer position at Hinkley Point C. Are you interested?",
+          callScript:
+            "Hi, this is James from Nucleo Talent. We're hiring steel fixers for Hinkley Point C. Interested?",
+        },
+      ]);
+    } catch (error) {
+      console.error('Failed to launch campaign:', error);
+      toast.error(`Failed to launch campaign: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    } finally {
+      setLaunching(false);
+    }
   };
 
   const handlePrevious = () => {
@@ -326,7 +563,7 @@ export function CampaignWizard({
                       <SelectValue placeholder="Select job type" />
                     </SelectTrigger>
                     <SelectContent className="bg-popover border-border">
-                      {jobsData.map((job) => (
+                      {jobs.map((job) => (
                         <SelectItem
                           key={job.id}
                           value={job.id}
@@ -339,76 +576,10 @@ export function CampaignWizard({
                   </Select>
                 </div>
 
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label className="text-foreground">Start Date</Label>
-                    <Popover>
-                      <PopoverTrigger asChild>
-                        <Button
-                          variant="outline"
-                          className={cn(
-                            "w-full justify-start text-left font-normal bg-background border-input text-foreground hover:bg-accent",
-                            !startDate && "text-muted-foreground"
-                          )}
-                        >
-                          <CalendarIcon className="mr-2 h-4 w-4" />
-
-                          {startDate ? (
-                            format(startDate, "PPP")
-                          ) : (
-                            <span>Select Date</span>
-                          )}
-                        </Button>
-                      </PopoverTrigger>
-                      <PopoverContent className="w-auto p-0 bg-popover border-border">
-                        <Calendar
-                          mode="single"
-                          selected={startDate}
-                          onSelect={setStartDate}
-                          initialFocus
-                          className="text-foreground"
-                        />
-                      </PopoverContent>
-                    </Popover>
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label className="text-foreground">End Date</Label>
-                    <Popover>
-                      <PopoverTrigger asChild>
-                        <Button
-                          variant="outline"
-                          className={cn(
-                            "w-full justify-start text-left font-normal bg-background border-input text-foreground hover:bg-accent",
-                            !endDate && "text-muted-foreground"
-                          )}
-                        >
-                          <CalendarIcon className="mr-2 h-4 w-4" />
-
-                          {endDate ? (
-                            format(endDate, "PPP")
-                          ) : (
-                            <span>Select Date</span>
-                          )}
-                        </Button>
-                      </PopoverTrigger>
-                      <PopoverContent className="w-auto p-0 bg-popover border-border">
-                        <Calendar
-                          mode="single"
-                          selected={endDate}
-                          onSelect={setEndDate}
-                          initialFocus
-                          className="text-foreground"
-                        />
-                      </PopoverContent>
-                    </Popover>
-                  </div>
-                </div>
-
                 <div className="space-y-2">
                   <Label className="text-foreground">Channel</Label>
                   <div className="flex gap-2">
-                    {["Phone", "WhatsApp", "SMS"].map((channel) => (
+                    {["Phone", "WhatsApp"].map((channel) => (
                       <Button
                         key={channel}
                         type="button"
@@ -432,63 +603,38 @@ export function CampaignWizard({
                 </div>
 
                 <div className="space-y-2">
-                  <Label className="text-foreground">Target Group</Label>
+                  <Label className="text-foreground">Select Candidates</Label>
                   <div className="flex gap-2">
                     <Button
                       type="button"
-                      variant={uploadMethod === "csv" ? "default" : "outline"}
-                      onClick={() => setUploadMethod("csv")}
-                      className={cn(
-                        "flex-1",
-                        uploadMethod === "csv"
-                          ? "bg-primary text-primary-foreground hover:bg-primary/90"
-                          : "bg-background border-input text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-                      )}
+                      variant="outline"
+                      onClick={() => setShowDatasetSelector(true)}
+                      className="flex-1 justify-between bg-background border-input text-foreground hover:bg-accent"
                     >
-                      <UploadIcon className="w-4 h-4 mr-2" />
-                      Upload CSV
+                      <div className="flex items-center gap-2">
+                        <UsersIcon className="w-4 h-4" />
+                        <span>
+                          {selectedDatasetIds.length > 0
+                            ? `${selectedDatasetIds.length} Selected`
+                            : "Select Datasets"}
+                        </span>
+                      </div>
+                      <ChevronRightIcon className="w-4 h-4 text-muted-foreground" />
                     </Button>
                     <Button
                       type="button"
-                      variant={
-                        uploadMethod === "existing" ? "default" : "outline"
-                      }
-                      onClick={() => {
-                        setUploadMethod("existing");
-                        setShowDatasetSelector(true);
-                      }}
-                      className={cn(
-                        "flex-1",
-                        uploadMethod === "existing"
-                          ? "bg-primary text-primary-foreground hover:bg-primary/90"
-                          : "bg-background border-input text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-                      )}
+                      variant="outline"
+                      onClick={() => setShowCSVUpload(true)}
+                      className="bg-background border-input text-foreground hover:bg-accent"
                     >
-                      <UsersIcon className="w-4 h-4 mr-2" />
-
-                      {selectedDatasetIds.length > 0
-                        ? `${selectedDatasetIds.length} Dataset${selectedDatasetIds.length > 1 ? "s" : ""} Selected`
-                        : "Select Dataset"}
+                      <PlusIcon className="w-4 h-4 mr-2" />
+                      Create New
                     </Button>
                   </div>
+                  <p className="text-xs text-muted-foreground">
+                    Select existing datasets or create a new one from CSV
+                  </p>
                 </div>
-
-                {uploadMethod === "csv" && (
-                  <div className="border-2 border-dashed border-border rounded-lg p-8 text-center">
-                    <UploadIcon className="w-12 h-12 mx-auto mb-4 text-muted-foreground" />
-
-                    <p className="text-muted-foreground mb-1">
-                      Drag and drop your CV here or click to browse your files
-                    </p>
-                    <p className="text-xs text-muted-foreground">
-                      Accepted formats: CSV, XLSX(Excel), XLSM
-                    </p>
-                    <p className="text-xs text-muted-foreground mt-4">
-                      The AI will automatically extract the candidates
-                      information
-                    </p>
-                  </div>
-                )}
               </div>
             )}
 
@@ -913,11 +1059,6 @@ export function CampaignWizard({
                       <h3 className="text-lg font-semibold text-foreground mb-1">
                         {campaignName || "Campaign Name"}
                       </h3>
-                      <p className="text-sm text-muted-foreground">
-                        Duration:{" "}
-                        {startDate ? format(startDate, "M/d/yyyy") : "N/A"} -{" "}
-                        {endDate ? format(endDate, "M/d/yyyy") : "N/A"}
-                      </p>
                     </div>
                     <div className="flex gap-2">
                       <span className="px-3 py-1 bg-primary/20 text-primary text-xs rounded-full">
@@ -932,7 +1073,7 @@ export function CampaignWizard({
 
                       <span className="text-muted-foreground">
                         {linkJob
-                          ? jobsData.find((j) => j.id === linkJob)?.title
+                          ? jobs.find((j) => j.id === linkJob)?.title
                           : "No job linked"}
                       </span>
                     </div>
@@ -963,23 +1104,30 @@ export function CampaignWizard({
                     {selectedChannels.includes("Phone") && (
                       <Button
                         variant="outline"
-                        onClick={() => setShowCallTester(true)}
+                        onClick={() => handleFetchPromptsAndTest('call')}
                         className="flex-1"
+                        disabled={fetchingPrompts || launchingWebCall || !linkJob}
                       >
                         <PhoneIcon className="w-4 h-4 mr-2" />
-                        Test Call Agent
+                        {launchingWebCall ? '🌐 Launching...' : fetchingPrompts ? 'Loading...' : 'Test Call Agent'}
                       </Button>
                     )}
                     {selectedChannels.includes("WhatsApp") && (
                       <Button
                         variant="outline"
-                        onClick={() => setShowWhatsAppTester(true)}
+                        onClick={() => handleFetchPromptsAndTest('whatsapp')}
                         className="flex-1"
+                        disabled={fetchingPrompts || !linkJob}
                       >
-                        Test WhatsApp Agent
+                        {fetchingPrompts ? 'Loading...' : 'Test WhatsApp Agent'}
                       </Button>
                     )}
                   </div>
+                  {!linkJob && (
+                    <p className="text-xs text-muted-foreground mt-2">
+                      Select a job first to test agents
+                    </p>
+                  )}
                 </div>
               </div>
             )}
@@ -1019,22 +1167,75 @@ export function CampaignWizard({
         onConfirm={(datasetIds) => setSelectedDatasetIds(datasetIds)}
       />
 
-      <CallAgentTester
-        open={showCallTester}
-        onOpenChange={setShowCallTester}
-        callScript={
-          matrices.find((m) => m.name === "Initial Outreach")?.callScript ||
-          "Hi, this is calling from the recruitment team."
-        }
+      <CSVUploadDialog
+        open={showCSVUpload}
+        onOpenChange={setShowCSVUpload}
+        onComplete={async (data) => {
+          try {
+            console.log("Creating dataset from campaign wizard:", data);
+            
+            // Transform CSV data to proper format
+            const transformedCandidates = data.data.map((row: any, index: number) => {
+              const phone = row.number || row.phone || row.Phone || row.Number || row.mobile || '';
+              const name = row.name || row.Name || row.full_name || row.fullName || `Candidate ${index + 1}`;
+              
+              return {
+                id: `csv_${Date.now()}_${index}`,
+                name: name.trim(),
+                phone: phone.trim(),
+                postcode: row.postcode || row.Postcode || null,
+                location: row.location || row.Location || null,
+                trade: row.trade || row.Trade || row.skill || row.Skill || null,
+                blueCard: row.blue_card === 'true' || row.blueCard === 'true' || row.BlueCard === 'true' || false,
+                greenCard: row.green_card === 'true' || row.greenCard === 'true' || row.GreenCard === 'true' || false,
+              };
+            });
+            
+            // Save to database
+            const newDatasetId = await addDataset({
+              name: data.name,
+              description: `Imported from CSV with ${transformedCandidates.length} candidates`,
+              source: "csv" as const,
+              candidateCount: transformedCandidates.length,
+              createdAt: new Date().toISOString(),
+              lastUpdated: new Date().toISOString(),
+              candidates: transformedCandidates,
+            });
+            
+            // Reload datasets to include the new one
+            const loadedDatasets = await loadDatasets();
+            setDatasets(loadedDatasets);
+            
+            // Auto-select the newly created dataset
+            setSelectedDatasetIds([newDatasetId]);
+            
+            toast.success(`Dataset created with ${transformedCandidates.length} candidates!`);
+            setShowCSVUpload(false);
+          } catch (error) {
+            console.error('Failed to create dataset:', error);
+            toast.error('Failed to create dataset');
+          }
+        }}
       />
 
       <WhatsAppAgentTester
         open={showWhatsAppTester}
         onOpenChange={setShowWhatsAppTester}
         whatsappMessage={
+          fetchedPrompts?.first_message_chat ||
           matrices.find((m) => m.name === "Initial Outreach")
             ?.whatsappMessage || "Hi! We have an exciting opportunity for you."
         }
+        agentPrompt={fetchedPrompts?.prompt_chat}
+      />
+
+      <RetellWebCallWidget
+        open={showWebCallWidget}
+        onOpenChange={setShowWebCallWidget}
+        accessToken={webCallToken}
+        callId={webCallId}
+        agentPrompt={fetchedPrompts?.prompt_call}
+        firstMessage={fetchedPrompts?.first_message_call}
       />
 
       {/* Launch Confirmation Dialog */}
@@ -1067,14 +1268,7 @@ export function CampaignWizard({
               <div className="flex items-center justify-between text-sm">
                 <span className="text-muted-foreground">Candidates:</span>
                 <span className="text-foreground font-medium">
-                  {targets.reduce((acc) => acc + 15, 0)}
-                </span>
-              </div>
-              <div className="flex items-center justify-between text-sm">
-                <span className="text-muted-foreground">Duration:</span>
-                <span className="text-foreground font-medium">
-                  {startDate ? format(startDate, "M/d/yyyy") : "N/A"} -{" "}
-                  {endDate ? format(endDate, "M/d/yyyy") : "N/A"}
+                  {datasets.filter(ds => selectedDatasetIds.includes(ds.id)).reduce((sum, ds) => sum + ds.candidateCount, 0)}
                 </span>
               </div>
             </div>
@@ -1090,8 +1284,9 @@ export function CampaignWizard({
             <Button
               onClick={handleLaunchCampaign}
               className="flex-1 bg-primary hover:bg-primary/90"
+              disabled={launching}
             >
-              Yes, Launch Campaign
+              {launching ? '🚀 Launching...' : 'Yes, Launch Campaign'}
             </Button>
           </div>
         </DialogContent>

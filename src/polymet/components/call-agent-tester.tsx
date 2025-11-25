@@ -14,6 +14,7 @@ interface CallAgentTesterProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   callScript: string;
+  agentPrompt?: string;
 }
 
 type ConversationMessage = {
@@ -27,6 +28,7 @@ export function CallAgentTester({
   open,
   onOpenChange,
   callScript,
+  agentPrompt,
 }: CallAgentTesterProps) {
   useZoomDialog();
   const [isCallActive, setIsCallActive] = useState(false);

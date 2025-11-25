@@ -61,6 +61,7 @@ export function CSVUploadDialog({
   const [columnMapping, setColumnMapping] = useState<ColumnMapping>({});
   const [datasetName, setDatasetName] = useState("");
   const [datasetDescription, setDatasetDescription] = useState("");
+  const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -68,6 +69,35 @@ export function CSVUploadDialog({
     if (file && file.type === "text/csv") {
       setCsvFile(file);
       parseCSV(file);
+    }
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+
+    const files = e.dataTransfer.files;
+    if (files.length > 0) {
+      const file = files[0];
+      if (file.type === "text/csv" || file.name.endsWith('.csv')) {
+        setCsvFile(file);
+        parseCSV(file);
+      } else {
+        alert('Please upload a CSV file');
+      }
     }
   };
 
@@ -272,9 +302,18 @@ export function CSVUploadDialog({
             <div className="space-y-4 py-4">
               <div
                 onClick={() => fileInputRef.current?.click()}
-                className="border-2 border-dashed border-border rounded-lg p-12 text-center hover:border-primary transition-colors cursor-pointer"
+                onDragOver={handleDragOver}
+                onDragLeave={handleDragLeave}
+                onDrop={handleDrop}
+                className={`border-2 border-dashed rounded-lg p-12 text-center transition-all cursor-pointer ${
+                  isDragging
+                    ? 'border-primary bg-primary/5 scale-105'
+                    : 'border-border hover:border-primary'
+                }`}
               >
-                <UploadIcon className="w-12 h-12 mx-auto mb-4 text-muted-foreground" />
+                <UploadIcon className={`w-12 h-12 mx-auto mb-4 transition-colors ${
+                  isDragging ? 'text-primary' : 'text-muted-foreground'
+                }`} />
 
                 <h3 className="font-semibold mb-2">
                   {csvFile ? csvFile.name : "Click to upload CSV file"}

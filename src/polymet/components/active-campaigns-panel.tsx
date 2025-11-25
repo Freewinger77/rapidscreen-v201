@@ -1,11 +1,49 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
-import { campaignsData } from "@/polymet/data/campaigns-data";
+import { type Campaign } from "@/polymet/data/campaigns-data";
+import { loadCampaigns } from "@/lib/supabase-storage";
 import { ChevronRightIcon, ChevronLeftIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
-export function ActiveCampaignsPanel() {
+interface ActiveCampaignsPanelProps {
+  jobId: string;
+}
+
+export function ActiveCampaignsPanel({ jobId }: ActiveCampaignsPanelProps) {
   const [isCollapsed, setIsCollapsed] = useState(false);
+  const [campaigns, setCampaigns] = useState<Campaign[]>([]);
+
+  useEffect(() => {
+    async function fetchCampaigns() {
+      try {
+        const allCampaigns = await loadCampaigns();
+        console.log('📊 All campaigns loaded:', allCampaigns.length);
+        console.log('🎯 Current jobId:', jobId);
+        
+        allCampaigns.forEach(c => {
+          console.log(`  Campaign: "${c.name}"`);
+          console.log(`    jobId: ${c.jobId}`);
+          console.log(`    status: ${c.status}`);
+          console.log(`    matches: ${c.jobId === jobId && c.status === 'active'}`);
+        });
+        
+        // Filter to only active campaigns for this job
+        const jobCampaigns = allCampaigns.filter(
+          c => c.jobId === jobId && c.status === 'active'
+        );
+        
+        console.log('✅ Filtered campaigns for this job:', jobCampaigns.length);
+        if (jobCampaigns.length > 0) {
+          console.log('Campaigns to display:', jobCampaigns.map(c => c.name));
+        }
+        
+        setCampaigns(jobCampaigns);
+      } catch (error) {
+        console.error('Failed to load campaigns:', error);
+      }
+    }
+    fetchCampaigns();
+  }, [jobId]);
 
   return (
     <div
@@ -45,7 +83,12 @@ export function ActiveCampaignsPanel() {
 
         {/* Campaigns List */}
         <div className="space-y-4">
-          {campaignsData.map((campaign) => (
+          {campaigns.length === 0 ? (
+            <p className="text-sm text-muted-foreground text-center py-4">
+              No active campaigns for this job
+            </p>
+          ) : (
+            campaigns.map((campaign) => (
             <div
               key={campaign.id}
               className="p-4 rounded-lg border border-border bg-card space-y-3 hover:border-primary/50 transition-colors"
@@ -82,7 +125,8 @@ export function ActiveCampaignsPanel() {
                 View Details
               </Link>
             </div>
-          ))}
+            ))
+          )}
         </div>
       </div>
     </div>

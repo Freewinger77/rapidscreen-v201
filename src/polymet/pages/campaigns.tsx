@@ -1,21 +1,47 @@
 import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { PlusIcon, SearchIcon, FilterIcon } from "lucide-react";
+import { EmptyState } from "@/components/ui/empty-state";
+import { PlusIcon, SearchIcon, FilterIcon, MegaphoneIcon } from "lucide-react";
 import { CampaignCard } from "@/polymet/components/campaign-card";
 import { CampaignWizard } from "@/polymet/components/campaign-wizard";
-import { campaignsData } from "@/polymet/data/campaigns-data";
-import { loadCampaigns, addCampaign } from "@/polymet/data/storage-manager";
+import { type Campaign } from "@/polymet/data/campaigns-data";
+import { loadCampaigns, addCampaign, addCandidateToJob } from "@/lib/supabase-storage";
+import { toast } from "sonner";
 
 export function CampaignsPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [showWizard, setShowWizard] = useState(false);
-  const [campaigns, setCampaigns] = useState(loadCampaigns(campaignsData));
+  const [campaigns, setCampaigns] = useState<Campaign[]>([]);
+  const [loading, setLoading] = useState(true);
 
-  // Reload campaigns when component mounts
+  // Load campaigns from Supabase
   useEffect(() => {
-    setCampaigns(loadCampaigns(campaignsData));
+    fetchCampaigns();
+    
+    // Also refresh when page becomes visible (e.g., after stopping campaign)
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        fetchCampaigns();
+      }
+    };
+    
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
   }, []);
+
+  async function fetchCampaigns() {
+    try {
+      setLoading(true);
+      const loadedCampaigns = await loadCampaigns();
+      setCampaigns(loadedCampaigns);
+    } catch (err) {
+      console.error('Failed to load campaigns:', err);
+      toast.error('Failed to load campaigns');
+    } finally {
+      setLoading(false);
+    }
+  }
 
   const filteredCampaigns = campaigns.filter((campaign) =>
     campaign.name.toLowerCase().includes(searchQuery.toLowerCase())
@@ -24,6 +50,22 @@ export function CampaignsPage() {
   const activeCampaigns = filteredCampaigns.filter(
     (c) => c.status === "active"
   );
+
+  const inactiveCampaigns = filteredCampaigns.filter(
+    (c) => c.status === "completed"
+  );
+
+  // Show loading state
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-screen">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mx-auto mb-4"></div>
+          <p className="text-muted-foreground">Loading campaigns...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="p-8">
@@ -79,36 +121,101 @@ export function CampaignsPage() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        {activeCampaigns.map((campaign) => (
-          <CampaignCard key={campaign.id} campaign={campaign} />
-        ))}
-      </div>
+      {/* Empty State - Only show if NO campaigns at all */}
+      {campaigns.length === 0 && (
+        <EmptyState
+          icon={MegaphoneIcon}
+          title="No campaigns found"
+          description="Launch your first campaign to start reaching out to candidates and tracking engagement"
+          actionLabel="Create Your First Campaign"
+          onAction={() => setShowWizard(true)}
+        />
+      )}
 
-      {activeCampaigns.length === 0 && (
-        <div className="text-center py-12">
-          <p className="text-muted-foreground mb-4">No campaigns found</p>
-          <Button onClick={() => setShowWizard(true)} variant="outline">
-            <PlusIcon className="w-4 h-4 mr-2" />
-            Create Your First Campaign
-          </Button>
+      {/* Active Campaigns Grid */}
+      {activeCampaigns.length > 0 && (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
+          {activeCampaigns.map((campaign) => (
+            <CampaignCard key={campaign.id} campaign={campaign} />
+          ))}
+        </div>
+      )}
+
+      {/* No Active Campaigns Message */}
+      {campaigns.length > 0 && activeCampaigns.length === 0 && inactiveCampaigns.length > 0 && (
+        <div className="text-center py-8 mb-8">
+          <p className="text-muted-foreground">No active campaigns. All campaigns have ended or been stopped.</p>
+        </div>
+      )}
+
+      {/* Inactive Campaigns Section */}
+      {inactiveCampaigns.length > 0 && (
+        <div className="mt-12">
+          <h2
+            className="text-2xl font-bold text-foreground mb-4"
+            style={{ paddingRight: "15px", paddingLeft: "15px" }}
+          >
+            Inactive Campaigns: {inactiveCampaigns.length.toString().padStart(2, "0")}
+          </h2>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {inactiveCampaigns.map((campaign) => (
+              <CampaignCard key={campaign.id} campaign={campaign} />
+            ))}
+          </div>
         </div>
       )}
 
       <CampaignWizard
         open={showWizard}
         onOpenChange={setShowWizard}
-        onComplete={(data) => {
-          console.log("Campaign created:", data);
-          // Save to storage and update state
-          const newCampaign = {
-            ...data,
-            id: `campaign-${Date.now()}`,
-            status: "active" as const,
-            createdAt: new Date().toISOString(),
-          };
-          addCampaign(newCampaign);
-          setCampaigns(loadCampaigns(campaignsData));
+        onComplete={async (data) => {
+          try {
+            console.log("Campaign data from wizard:", data);
+            console.log("Campaign ID (with UID):", data.campaignId);
+            
+            // Save to database with the FULL campaign ID from webhook
+            const campaignToSave = {
+              ...data,
+              status: "active" as const,
+              createdAt: new Date().toISOString(),
+            };
+            
+            // If we have a campaignId from webhook, use it as the ID
+            if (data.campaignId) {
+              // Use the webhook's campaign ID directly
+              console.log("Using webhook campaign ID:", data.campaignId);
+            }
+            
+            const newCampaignId = await addCampaign(campaignToSave);
+            console.log("Campaign saved with ID:", newCampaignId);
+            
+            // Add campaign candidates to job candidates (so they appear on kanban)
+            if (data.candidates && data.candidates.length > 0 && data.jobId) {
+              for (const campaignCandidate of data.candidates) {
+                try {
+                  await addCandidateToJob(data.jobId, {
+                    name: `${campaignCandidate.forename} ${campaignCandidate.surname}`.trim(),
+                    phone: campaignCandidate.telMobile,
+                    email: campaignCandidate.email,
+                    status: 'not-contacted',  // Start in not-contacted, will sync from backend
+                    notes: [],
+                  });
+                } catch (err) {
+                  console.error('Failed to add candidate to job:', err);
+                }
+              }
+              console.log(`✅ Added ${data.candidates.length} candidates to job kanban`);
+            }
+            
+            // Reload campaigns
+            await fetchCampaigns();
+            
+            toast.success('Campaign created successfully!');
+            setShowWizard(false);
+          } catch (error) {
+            console.error('Failed to create campaign:', error);
+            toast.error('Failed to create campaign');
+          }
         }}
       />
     </div>

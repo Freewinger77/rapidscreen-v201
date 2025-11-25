@@ -97,7 +97,7 @@ export interface Campaign {
   totalCandidates: number;
   hired: number;
   responseRate: number;
-  status: "active" | "draft" | "completed";
+  status: "active" | "draft" | "completed" | "stopped";
   createdAt: string;
   candidates?: CampaignCandidate[];
 }

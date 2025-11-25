@@ -34,15 +34,14 @@ export function CandidateCard({
       }}
       onClick={handleClick}
     >
-      {noteCount > 0 && (
-        <div className="absolute -top-2 -right-2 flex items-center gap-1 px-2 py-1 bg-primary text-primary-foreground text-xs font-medium rounded-full shadow-md">
-          <StickyNoteIcon className="w-3 h-3" />
-
-          {noteCount}
-        </div>
-      )}
       <h4 className="font-semibold text-foreground">{candidate.name}</h4>
       <p className="text-sm text-muted-foreground mt-1">{candidate.phone}</p>
+      {noteCount > 0 && (
+        <div className="flex items-center gap-1 mt-2 text-xs text-muted-foreground">
+          <StickyNoteIcon className="w-3 h-3" />
+          <span>{noteCount} notes</span>
+        </div>
+      )}
     </div>
   );
 }

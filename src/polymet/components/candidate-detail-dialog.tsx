@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { useZoomDialog } from "@/polymet/components/animated-dialog";
 import { AddNoteDialog } from "@/polymet/components/add-note-dialog";
+import { getChatHistoryByPhone, getCallsByPhone, getSessionByPhone } from "@/lib/backend-api";
 import {
   PhoneIcon,
   MessageSquareIcon,
@@ -12,6 +13,7 @@ import {
   TrashIcon,
   CheckIcon,
   XIcon,
+  CheckCircleIcon,
 } from "lucide-react";
 import {
   Dialog,
@@ -30,8 +32,8 @@ interface CandidateDetailDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   candidate: CampaignCandidate | null;
-  defaultTab?: "notes" | "timeline" | "conversation";
-  visibleTabs?: Array<"notes" | "timeline" | "conversation">;
+  defaultTab?: "timeline" | "conversation" | "notes";
+  visibleTabs?: Array<"timeline" | "conversation" | "notes">;
   onNotesUpdate?: (candidateId: string, notes: CandidateNote[]) => void;
 }
 
@@ -39,8 +41,8 @@ export function CandidateDetailDialog({
   open,
   onOpenChange,
   candidate,
-  defaultTab = "notes",
-  visibleTabs = ["notes", "timeline", "conversation"],
+  defaultTab = "timeline",
+  visibleTabs = ["timeline", "conversation", "notes"],
   onNotesUpdate,
 }: CandidateDetailDialogProps) {
   useZoomDialog();
@@ -51,15 +53,49 @@ export function CandidateDetailDialog({
   const [isEditingCandidate, setIsEditingCandidate] = useState(false);
   const [editedCandidate, setEditedCandidate] =
     useState<CampaignCandidate | null>(null);
+  
+  // Backend data
+  const [backendChatHistory, setBackendChatHistory] = useState<any[]>([]);
+  const [backendCalls, setBackendCalls] = useState<any[]>([]);
+  const [backendSession, setBackendSession] = useState<any>(null);
+  const [loadingBackend, setLoadingBackend] = useState(false);
 
-  // Reset to default tab when dialog opens and load notes
+  // Reset to default tab when dialog opens and load notes + backend data
   useEffect(() => {
-    if (open) {
+    if (open && candidate) {
       setActiveTab(defaultTab);
       setCandidateNotes(candidate?.notes || []);
       setEditedCandidate(candidate);
+      
+      // Load backend data
+      loadBackendData(candidate.telMobile);
     }
   }, [open, defaultTab, candidate]);
+
+  async function loadBackendData(phoneNumber: string) {
+    setLoadingBackend(true);
+    try {
+      const [chatHistory, calls, session] = await Promise.all([
+        getChatHistoryByPhone(phoneNumber),
+        getCallsByPhone(phoneNumber),
+        getSessionByPhone(phoneNumber),
+      ]);
+      
+      setBackendChatHistory(chatHistory);
+      setBackendCalls(calls);
+      setBackendSession(session);
+      
+      console.log('✅ Backend data loaded:', {
+        messages: chatHistory.length,
+        calls: calls.length,
+        session: session?.session_id
+      });
+    } catch (error) {
+      console.error('Failed to load backend data:', error);
+    } finally {
+      setLoadingBackend(false);
+    }
+  }
 
   if (!candidate) return null;
 
@@ -308,15 +344,6 @@ export function CandidateDetailDialog({
               gridTemplateColumns: `repeat(${visibleTabs.length}, 1fr)`,
             }}
           >
-            {visibleTabs.includes("notes") && (
-              <TabsTrigger
-                value="notes"
-                className="data-[state=active]:bg-background data-[state=active]:text-primary"
-              >
-                <StickyNoteIcon className="w-4 h-4 mr-2" />
-                Notes
-              </TabsTrigger>
-            )}
             {visibleTabs.includes("timeline") && (
               <TabsTrigger
                 value="timeline"
@@ -333,6 +360,15 @@ export function CandidateDetailDialog({
               >
                 <MessageCircleIcon className="w-4 h-4 mr-2" />
                 Conversation
+              </TabsTrigger>
+            )}
+            {visibleTabs.includes("notes") && (
+              <TabsTrigger
+                value="notes"
+                className="data-[state=active]:bg-background data-[state=active]:text-primary"
+              >
+                <StickyNoteIcon className="w-4 h-4 mr-2" />
+                Notes
               </TabsTrigger>
             )}
           </TabsList>
@@ -414,135 +450,220 @@ export function CandidateDetailDialog({
             </div>
           </TabsContent>
 
-          {/* Timeline Tab */}
+          {/* Timeline Tab - Events from Backend */}
           <TabsContent value="timeline" className="mt-4">
             <div className="space-y-4">
               <div className="flex items-center justify-between">
                 <h3 className="text-lg font-semibold">Activity Timeline</h3>
-                {whatsappMessages.length > 0 && (
-                  <Button variant="outline" size="sm">
-                    <MessageSquareIcon className="w-4 h-4 mr-2" />
-                    WhatsApp
-                  </Button>
-                )}
+                <div className="flex items-center gap-2">
+                  <div className="w-2 h-2 rounded-full bg-green-500"></div>
+                  <span className="text-xs text-muted-foreground">Live from backend</span>
+                </div>
               </div>
 
               <ScrollArea className="h-[450px] pr-4">
-                <div className="space-y-3">
-                  {timelineEvents.length === 0 && (
-                    <div className="text-center py-12 text-muted-foreground">
-                      <ClockIcon className="w-12 h-12 mx-auto mb-3 opacity-50" />
+                {loadingBackend ? (
+                  <div className="text-center py-12">
+                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto mb-2"></div>
+                    <p className="text-sm text-muted-foreground">Loading timeline...</p>
+                  </div>
+                ) : (
+                  <div className="relative">
+                    {/* Connecting Line */}
+                    <div className="absolute left-5 top-0 bottom-0 w-0.5 bg-border"></div>
+                    
+                    <div className="space-y-6 relative">
+                      {/* WhatsApp Chat Initiated */}
+                      {backendChatHistory.length > 0 && (
+                        <div className="flex items-start gap-4">
+                          <div className="relative z-10 flex items-center justify-center w-10 h-10 rounded-full bg-background border-2 border-green-500 flex-shrink-0">
+                            <MessageSquareIcon className="w-4 h-4 text-green-500" />
+                          </div>
+                          <div className="flex-1 min-w-0 pt-1">
+                            <p className="text-base font-medium leading-relaxed mb-2">
+                              WhatsApp campaign sent to candidate
+                            </p>
+                            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                              <ClockIcon className="w-4 h-4 flex-shrink-0" />
+                              <span>{backendSession?.created_at ? new Date(backendSession.created_at).toLocaleString() : 'Just now'}</span>
+                            </div>
+                          </div>
+                        </div>
+                      )}
 
-                      <p>No activity yet. Log first contact.</p>
+                      {/* Call Made Events */}
+                      {backendCalls.map((call, idx) => (
+                        <div key={call.call_id} className="flex items-start gap-4">
+                          <div className="relative z-10 flex items-center justify-center w-10 h-10 rounded-full bg-background border-2 border-chart-1 flex-shrink-0">
+                            <PhoneIcon className="w-4 h-4 text-chart-1" />
+                          </div>
+                          <div className="flex-1 min-w-0 pt-1">
+                            <p className="text-base font-medium leading-relaxed mb-2">
+                              {call.duration ? `Call completed` : 'Phone call initiated'}
+                            </p>
+                            <div className="flex items-center gap-2 text-sm text-muted-foreground mb-1">
+                              <ClockIcon className="w-4 h-4 flex-shrink-0" />
+                              <span>{new Date(call.called_at).toLocaleString()}</span>
+                            </div>
+                            {call.duration && (
+                              <p className="text-sm text-muted-foreground">Duration: {call.duration}</p>
+                            )}
+                            {call.status && (
+                              <p className="text-sm text-muted-foreground">Status: {call.status}</p>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+
+                      {/* Session Created */}
+                      {backendSession && (
+                        <div className="flex items-start gap-4">
+                          <div className="relative z-10 flex items-center justify-center w-10 h-10 rounded-full bg-background border-2 border-primary flex-shrink-0">
+                            <CheckCircleIcon className="w-4 h-4 text-primary" />
+                          </div>
+                          <div className="flex-1 min-w-0 pt-1">
+                            <p className="text-base font-medium leading-relaxed mb-2">
+                              Campaign started
+                            </p>
+                            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                              <ClockIcon className="w-4 h-4 flex-shrink-0" />
+                              <span>{new Date(backendSession.created_at).toLocaleString()}</span>
+                            </div>
+                          </div>
+                        </div>
+                      )}
                     </div>
-                  )}
-                  {timelineEvents.map((event) => (
-                    <div
-                      key={event.id}
-                      className="flex items-start gap-3 p-3 border border-border rounded-lg bg-card hover:bg-accent/50 transition-colors"
-                    >
-                      <div className="flex items-center justify-center w-8 h-8 rounded-full bg-primary/10 flex-shrink-0">
-                        {event.type === "whatsapp" && (
-                          <MessageSquareIcon className="w-4 h-4 text-primary" />
-                        )}
-                        {event.type === "call" && (
-                          <PhoneIcon className="w-4 h-4 text-chart-1" />
-                        )}
-                        {event.type === "note" && (
-                          <StickyNoteIcon className="w-4 h-4 text-chart-2" />
-                        )}
+
+                    {!backendSession && !backendChatHistory.length && !backendCalls.length && (
+                      <div className="text-center py-12 text-muted-foreground">
+                        <ClockIcon className="w-12 h-12 mx-auto mb-3 opacity-50" />
+                        <p>No activity yet. Campaign will create timeline events.</p>
                       </div>
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm leading-relaxed">
-                          {event.description}
-                        </p>
-                        <p className="text-xs text-muted-foreground mt-1">
-                          {event.timestamp}
-                        </p>
-                      </div>
-                    </div>
-                  ))}
-                </div>
+                    )}
+                  </div>
+                )}
               </ScrollArea>
             </div>
           </TabsContent>
 
-          {/* Conversation Tab */}
+          {/* Conversation Tab - Combined WhatsApp + Calls (Merged Chronologically) */}
           <TabsContent value="conversation" className="mt-4">
             <div className="space-y-4">
               <div className="flex items-center justify-between">
                 <h3 className="text-lg font-semibold">
-                  {whatsappMessages.length > 0
-                    ? "WhatsApp Conversation"
-                    : calls.length > 0
-                      ? "Call Transcript"
-                      : "Conversation"}
+                  {backendChatHistory.length > 0 ? "WhatsApp Conversation" : backendCalls.length > 0 ? "Call Transcript" : "Conversation"}
                 </h3>
+                <div className="flex items-center gap-2">
+                  <div className="w-2 h-2 rounded-full bg-green-500"></div>
+                  <span className="text-xs text-muted-foreground">Live from backend</span>
+                </div>
               </div>
 
               <ScrollArea className="h-[450px] pr-4">
-                {whatsappMessages.length === 0 && calls.length === 0 && (
+                {loadingBackend ? (
+                  <div className="text-center py-12">
+                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto mb-2"></div>
+                    <p className="text-sm text-muted-foreground">Loading conversation...</p>
+                  </div>
+                ) : backendChatHistory.length === 0 && backendCalls.length === 0 ? (
                   <div className="text-center py-12 text-muted-foreground">
                     <MessageCircleIcon className="w-12 h-12 mx-auto mb-3 opacity-50" />
-
                     <p>No conversation history yet.</p>
                   </div>
-                )}
-
-                {/* WhatsApp Messages */}
-                {whatsappMessages.length > 0 && (
-                  <div className="space-y-3">
-                    {whatsappMessages.map((msg) => (
-                      <div
-                        key={msg.id}
-                        className={`flex ${msg.sender === "agent" ? "justify-end" : "justify-start"}`}
-                      >
-                        <div
-                          className={`max-w-[70%] rounded-lg p-3 ${
-                            msg.sender === "agent"
-                              ? "bg-primary text-primary-foreground"
-                              : "bg-muted text-foreground"
-                          }`}
-                        >
-                          <p className="text-sm leading-relaxed">{msg.text}</p>
+                ) : (
+                  <div className="space-y-4">
+                    {/* WhatsApp Messages */}
+                    {backendChatHistory.length > 0 && (
+                      <>
+                        <div className="flex items-center gap-2 mb-4">
+                          <div className="flex-1 border-t border-border"></div>
+                          <span className="text-xs text-muted-foreground">
+                            WhatsApp • {backendSession?.created_at ? new Date(backendSession.created_at).toLocaleString() : 'Just now'}
+                          </span>
+                          <div className="flex-1 border-t border-border"></div>
+                        </div>
+                        <div className="space-y-3">
+                          {backendChatHistory.map((msg, index) => (
                           <div
-                            className={`flex items-center gap-1 mt-1 text-xs ${
-                              msg.sender === "agent"
-                                ? "text-primary-foreground/70"
-                                : "text-muted-foreground"
-                            }`}
+                            key={index}
+                            className={`flex ${msg.sender === "user" ? "justify-start" : "justify-end"}`}
                           >
-                            <span>{msg.timestamp}</span>
-                            {msg.status && msg.sender === "agent" && (
-                              <span>• {msg.status}</span>
+                            <div
+                              className={`max-w-[70%] rounded-lg p-3 ${
+                                msg.sender === "user"
+                                  ? "bg-muted text-foreground"
+                                  : "bg-primary text-primary-foreground"
+                              }`}
+                            >
+                              <p className="text-sm leading-relaxed">{msg.text}</p>
+                              <div
+                                className={`flex items-center gap-1 mt-1 text-xs ${
+                                  msg.sender === "user"
+                                    ? "text-muted-foreground"
+                                    : "text-primary-foreground/70"
+                                }`}
+                              >
+                                <span>{msg.timestamp ? new Date(msg.timestamp).toLocaleString() : ''}</span>
+                                {msg.status && (
+                                  <span>• {msg.status}</span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                          ))}
+                        </div>
+                      </>
+                    )}
+
+                    {/* Call Transcripts - Merged After WhatsApp if no response */}
+                    {backendCalls.length > 0 && (
+                      <div className="mt-6">
+                        {backendCalls.map((call) => (
+                          <div key={call.call_id} className="space-y-3">
+                            <div className="flex items-center gap-2 mb-4">
+                              <div className="flex-1 border-t border-border"></div>
+                              <span className="text-xs text-muted-foreground">
+                                Phone Call • {new Date(call.called_at).toLocaleString()}
+                                {call.duration && ` • Duration: ${call.duration}`}
+                              </span>
+                              <div className="flex-1 border-t border-border"></div>
+                            </div>
+                            {call.transcript && (
+                              <div className="space-y-2">
+                                {call.transcript.split('\n').map((line: string, i: number) => {
+                                  if (!line.trim()) return null;
+                                  const isAgent = line.toLowerCase().includes('agent:');
+                                  const isUser = line.toLowerCase().includes('user:') || line.toLowerCase().includes('you:');
+                                  
+                                  return (
+                                    <div
+                                      key={i}
+                                      className={`flex ${isUser ? "justify-start" : "justify-end"}`}
+                                    >
+                                      <div
+                                        className={`max-w-[70%] rounded-lg p-3 text-sm ${
+                                          isUser
+                                            ? "bg-muted text-foreground"
+                                            : "bg-chart-1/20 text-foreground border border-chart-1/30"
+                                        }`}
+                                      >
+                                        {line}
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
                             )}
                           </div>
-                        </div>
+                        ))}
                       </div>
-                    ))}
-                  </div>
-                )}
-
-                {/* Call Transcript */}
-                {whatsappMessages.length === 0 && calls.length > 0 && (
-                  <div className="space-y-4">
-                    {calls[0].transcript.map((message) => (
-                      <div key={message.id} className="flex items-start gap-3">
-                        <div className="flex items-center gap-2 min-w-[80px]">
-                          <span className="font-semibold capitalize text-sm">
-                            {message.speaker}:
-                          </span>
-                        </div>
-                        <p className="flex-1 text-sm leading-relaxed">
-                          {message.message}
-                        </p>
-                      </div>
-                    ))}
+                    )}
                   </div>
                 )}
               </ScrollArea>
             </div>
           </TabsContent>
+
         </Tabs>
       </DialogContent>
 

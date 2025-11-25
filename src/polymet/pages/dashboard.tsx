@@ -1,9 +1,10 @@
 import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
-import { loadCampaigns } from "@/polymet/data/storage-manager";
-import { campaignsData } from "@/polymet/data/campaigns-data";
-import { loadJobs } from "@/polymet/data/storage-manager";
-import { jobsData } from "@/polymet/data/jobs-data";
+import { loadCampaigns } from "@/lib/supabase-storage";
+import { loadJobs } from "@/lib/supabase-storage";
+import { useAutoSync } from "@/hooks/use-auto-sync";
+import type { Campaign } from "@/polymet/data/campaigns-data";
+import type { Job } from "@/polymet/data/jobs-data";
 import {
   PhoneIcon,
   UsersIcon,
@@ -34,8 +35,38 @@ import {
 import { ChartContainer } from "@/components/ui/chart";
 
 export function DashboardPage() {
-  const [campaigns] = useState(loadCampaigns(campaignsData));
-  const [jobs] = useState(loadJobs(jobsData));
+  const [campaigns, setCampaigns] = useState<Campaign[]>([]);
+  const [jobs, setJobs] = useState<Job[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  // Auto-sync backend data to frontend every 30 seconds
+  useAutoSync(30000);
+
+  // Load data from Supabase
+  useEffect(() => {
+    async function fetchData() {
+      try {
+        setLoading(true);
+        setError(null);
+        
+        const [loadedCampaigns, loadedJobs] = await Promise.all([
+          loadCampaigns(),
+          loadJobs(),
+        ]);
+        
+        setCampaigns(loadedCampaigns);
+        setJobs(loadedJobs);
+      } catch (err) {
+        console.error('Failed to load dashboard data:', err);
+        setError('Failed to load data. Please refresh the page.');
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    fetchData();
+  }, []);
 
   // Calculate metrics
   const totalCandidates = campaigns.reduce(
@@ -189,6 +220,35 @@ export function DashboardPage() {
         return <ActivityIcon className="w-4 h-4 text-muted-foreground" />;
     }
   };
+
+  // Show loading state
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-screen">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mx-auto mb-4"></div>
+          <p className="text-muted-foreground">Loading dashboard...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Show error state
+  if (error) {
+    return (
+      <div className="flex items-center justify-center h-screen">
+        <div className="text-center">
+          <p className="text-destructive mb-4">{error}</p>
+          <button 
+            onClick={() => window.location.reload()}
+            className="px-4 py-2 bg-primary text-white rounded hover:bg-primary/90"
+          >
+            Retry
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6 md:space-y-8 pb-6 max-w-full overflow-hidden">

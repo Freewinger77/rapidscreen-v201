@@ -1,0 +1,629 @@
+/**
+ * SUPABASE STORAGE MANAGER
+ * 
+ * Replaces localStorage with Supabase database operations
+ * Provides the same API as storage-manager.ts but uses database
+ */
+
+import sql from './db';
+import type { Job, Candidate, CandidateNote } from '@/polymet/data/jobs-data';
+import type {
+  Campaign,
+  CampaignCandidate,
+  CampaignTarget,
+  CampaignMatrix,
+  CallRecord,
+  WhatsAppMessage,
+} from '@/polymet/data/campaigns-data';
+import type { Dataset } from '@/polymet/data/datasets-data';
+
+// ============================================
+// JOBS OPERATIONS
+// ============================================
+
+export async function loadJobs(): Promise<Job[]> {
+  try {
+    const jobs = await sql<any[]>`
+      SELECT * FROM jobs ORDER BY created_at DESC
+    `;
+    
+    // Load candidates for each job
+    const jobsWithCandidates = await Promise.all(
+      jobs.map(async (job) => {
+        const candidates = await sql<any[]>`
+          SELECT * FROM candidates 
+          WHERE job_id = ${job.id}
+          ORDER BY position
+        `;
+        
+        // Load notes for each candidate
+        const candidatesWithNotes = await Promise.all(
+          candidates.map(async (candidate) => {
+            const notes = await sql<any[]>`
+              SELECT * FROM candidate_notes
+              WHERE candidate_id = ${candidate.id}
+              ORDER BY created_at DESC
+            `;
+            
+            return {
+              id: candidate.id,
+              name: candidate.name,
+              phone: candidate.phone,
+              email: candidate.email,
+              status: candidate.status,
+              notes: notes.map(note => ({
+                id: note.id,
+                text: note.text,
+                author: note.author,
+                timestamp: note.created_at,
+                actionType: note.action_type,
+                actionDate: note.action_date,
+              })),
+            };
+          })
+        );
+        
+        return {
+          id: job.id,
+          title: job.title,
+          company: job.company,
+          location: job.location,
+          employmentType: job.employment_type,
+          salaryRange: job.salary_range,
+          openPositions: job.open_positions,
+          hired: job.hired,
+          target: job.target,
+          description: job.description,
+          tags: job.tags || [],
+          candidates: candidatesWithNotes,
+        };
+      })
+    );
+    
+    return jobsWithCandidates;
+  } catch (error) {
+    console.error('Error loading jobs:', error);
+    return [];
+  }
+}
+
+export async function saveJobs(jobs: Job[]): Promise<void> {
+  // This function is kept for API compatibility but isn't used
+  // Use individual update functions instead
+  console.warn('saveJobs() is deprecated. Use addJob(), updateJob(), etc.');
+}
+
+export async function addJob(job: Omit<Job, 'id'>): Promise<string> {
+  const [insertedJob] = await sql<{ id: string }[]>`
+    INSERT INTO jobs (
+      title, company, location, employment_type, salary_range,
+      open_positions, hired, target, description, tags
+    ) VALUES (
+      ${job.title},
+      ${job.company},
+      ${job.location},
+      ${job.employmentType},
+      ${job.salaryRange},
+      ${job.openPositions},
+      ${job.hired},
+      ${job.target},
+      ${job.description},
+      ${sql.array(job.tags)}
+    )
+    RETURNING id
+  `;
+  
+  return insertedJob.id;
+}
+
+export async function updateJob(jobId: string, updates: Partial<Job>): Promise<void> {
+  const fields: string[] = [];
+  const values: any[] = [];
+  
+  if (updates.title !== undefined) {
+    fields.push('title = $' + (values.length + 1));
+    values.push(updates.title);
+  }
+  if (updates.company !== undefined) {
+    fields.push('company = $' + (values.length + 1));
+    values.push(updates.company);
+  }
+  if (updates.location !== undefined) {
+    fields.push('location = $' + (values.length + 1));
+    values.push(updates.location);
+  }
+  if (updates.employmentType !== undefined) {
+    fields.push('employment_type = $' + (values.length + 1));
+    values.push(updates.employmentType);
+  }
+  if (updates.salaryRange !== undefined) {
+    fields.push('salary_range = $' + (values.length + 1));
+    values.push(updates.salaryRange);
+  }
+  if (updates.openPositions !== undefined) {
+    fields.push('open_positions = $' + (values.length + 1));
+    values.push(updates.openPositions);
+  }
+  if (updates.hired !== undefined) {
+    fields.push('hired = $' + (values.length + 1));
+    values.push(updates.hired);
+  }
+  if (updates.target !== undefined) {
+    fields.push('target = $' + (values.length + 1));
+    values.push(updates.target);
+  }
+  if (updates.description !== undefined) {
+    fields.push('description = $' + (values.length + 1));
+    values.push(updates.description);
+  }
+  if (updates.tags !== undefined) {
+    fields.push('tags = $' + (values.length + 1));
+    values.push(updates.tags);
+  }
+  
+  if (fields.length === 0) return;
+  
+  await sql`
+    UPDATE jobs 
+    SET ${sql(Object.fromEntries(
+      Object.entries(updates).map(([key, value]) => {
+        // Convert camelCase to snake_case
+        const dbKey = key.replace(/([A-Z])/g, '_$1').toLowerCase();
+        return [dbKey, value];
+      })
+    ))}
+    WHERE id = ${jobId}
+  `;
+}
+
+export async function deleteJob(jobId: string): Promise<void> {
+  await sql`DELETE FROM jobs WHERE id = ${jobId}`;
+}
+
+// ============================================
+// CANDIDATES OPERATIONS
+// ============================================
+
+export async function addCandidateToJob(
+  jobId: string,
+  candidate: Omit<Candidate, 'id'>
+): Promise<string> {
+  const [inserted] = await sql<{ id: string }[]>`
+    INSERT INTO candidates (job_id, name, phone, email, status)
+    VALUES (${jobId}, ${candidate.name}, ${candidate.phone}, ${candidate.email || null}, ${candidate.status})
+    RETURNING id
+  `;
+  
+  return inserted.id;
+}
+
+export async function updateCandidate(
+  jobId: string,
+  candidateId: string,
+  updates: Partial<Candidate>
+): Promise<void> {
+  await sql`
+    UPDATE candidates
+    SET ${sql(updates)}
+    WHERE id = ${candidateId} AND job_id = ${jobId}
+  `;
+}
+
+export async function updateCandidates(jobId: string, candidates: Candidate[]): Promise<void> {
+  // Delete existing candidates for this job
+  await sql`DELETE FROM candidates WHERE job_id = ${jobId}`;
+  
+  // Insert new candidates
+  for (const candidate of candidates) {
+    await addCandidateToJob(jobId, candidate);
+  }
+}
+
+export async function deleteCandidateFromJob(
+  jobId: string,
+  candidateId: string
+): Promise<void> {
+  await sql`DELETE FROM candidates WHERE id = ${candidateId} AND job_id = ${jobId}`;
+}
+
+// ============================================
+// CANDIDATE NOTES OPERATIONS
+// ============================================
+
+export async function addCandidateNote(
+  jobId: string,
+  candidateId: string,
+  note: Omit<CandidateNote, 'id'>
+): Promise<string> {
+  const [inserted] = await sql<{ id: string }[]>`
+    INSERT INTO candidate_notes (candidate_id, text, author, action_type, action_date)
+    VALUES (
+      ${candidateId},
+      ${note.text},
+      ${note.author},
+      ${note.actionType || null},
+      ${note.actionDate || null}
+    )
+    RETURNING id
+  `;
+  
+  return inserted.id;
+}
+
+export async function updateCandidateNote(
+  jobId: string,
+  candidateId: string,
+  noteId: string,
+  updates: Partial<CandidateNote>
+): Promise<void> {
+  await sql`
+    UPDATE candidate_notes
+    SET ${sql(updates)}
+    WHERE id = ${noteId} AND candidate_id = ${candidateId}
+  `;
+}
+
+export async function deleteCandidateNote(
+  jobId: string,
+  candidateId: string,
+  noteId: string
+): Promise<void> {
+  await sql`DELETE FROM candidate_notes WHERE id = ${noteId} AND candidate_id = ${candidateId}`;
+}
+
+// ============================================
+// CAMPAIGNS OPERATIONS
+// ============================================
+
+export async function loadCampaigns(): Promise<Campaign[]> {
+  try {
+    const campaigns = await sql<any[]>`
+      SELECT * FROM campaigns ORDER BY created_at DESC
+    `;
+    
+    const campaignsWithData = await Promise.all(
+      campaigns.map(async (campaign) => {
+        // Load targets
+        const targets = await sql<any[]>`
+          SELECT * FROM campaign_targets WHERE campaign_id = ${campaign.id}
+        `;
+        
+        // Load matrices
+        const matrices = await sql<any[]>`
+          SELECT * FROM campaign_matrices WHERE campaign_id = ${campaign.id}
+        `;
+        
+        // Load candidates with all nested data
+        const candidates = await loadCampaignCandidates(campaign.id);
+        
+        return {
+          id: campaign.id,
+          name: campaign.name,
+          jobId: campaign.job_id,
+          jobTitle: campaign.job_title,
+          linkJob: campaign.link_job,
+          startDate: campaign.start_date,
+          endDate: campaign.end_date,
+          channels: campaign.channels || [],
+          targets: targets.map(t => ({
+            id: t.id,
+            name: t.name,
+            type: t.type,
+            description: t.description,
+            goalType: t.goal_type,
+          })),
+          matrices: matrices.map(m => ({
+            id: m.id,
+            name: m.name,
+            description: m.description,
+            whatsappMessage: m.whatsapp_message,
+            callScript: m.call_script,
+          })),
+          totalCandidates: campaign.total_candidates,
+          hired: campaign.hired,
+          responseRate: campaign.response_rate,
+          status: campaign.status,
+          createdAt: campaign.created_at,
+          candidates,
+        };
+      })
+    );
+    
+    return campaignsWithData;
+  } catch (error) {
+    console.error('Error loading campaigns:', error);
+    return [];
+  }
+}
+
+async function loadCampaignCandidates(campaignId: string): Promise<CampaignCandidate[]> {
+  const candidates = await sql<any[]>`
+    SELECT * FROM campaign_candidates WHERE campaign_id = ${campaignId}
+  `;
+  
+  return Promise.all(
+    candidates.map(async (candidate) => {
+      // Load calls with transcripts
+      const calls = await sql<any[]>`
+        SELECT * FROM call_records WHERE campaign_candidate_id = ${candidate.id}
+      `;
+      
+      const callsWithTranscripts = await Promise.all(
+        calls.map(async (call) => {
+          const transcripts = await sql<any[]>`
+            SELECT * FROM call_transcript_messages 
+            WHERE call_record_id = ${call.id}
+            ORDER BY sequence
+          `;
+          
+          return {
+            id: call.id,
+            callId: call.call_id,
+            phoneFrom: call.phone_from,
+            phoneTo: call.phone_to,
+            duration: call.duration,
+            timestamp: call.created_at,
+            availableToWork: call.available_to_work,
+            interested: call.interested,
+            knowReferee: call.know_referee,
+            transcript: transcripts.map(t => ({
+              id: t.id,
+              speaker: t.speaker,
+              message: t.message,
+              timestamp: t.timestamp,
+            })),
+          };
+        })
+      );
+      
+      // Load WhatsApp messages
+      const whatsappMessages = await sql<any[]>`
+        SELECT * FROM whatsapp_messages 
+        WHERE campaign_candidate_id = ${candidate.id}
+        ORDER BY created_at
+      `;
+      
+      // Load notes
+      const notes = await sql<any[]>`
+        SELECT * FROM campaign_candidate_notes
+        WHERE campaign_candidate_id = ${candidate.id}
+        ORDER BY created_at DESC
+      `;
+      
+      return {
+        id: candidate.id,
+        forename: candidate.forename,
+        surname: candidate.surname,
+        telMobile: candidate.tel_mobile,
+        email: candidate.email,
+        callStatus: candidate.call_status,
+        availableToWork: candidate.available_to_work,
+        interested: candidate.interested,
+        knowReferee: candidate.know_referee,
+        lastContact: candidate.last_contact,
+        experience: candidate.experience,
+        calls: callsWithTranscripts,
+        whatsappMessages: whatsappMessages.map(m => ({
+          id: m.id,
+          sender: m.sender,
+          text: m.text,
+          timestamp: m.created_at,
+          status: m.status,
+        })),
+        notes: notes.map(n => ({
+          id: n.id,
+          text: n.text,
+          author: n.author,
+          timestamp: n.created_at,
+          actionType: n.action_type,
+          actionDate: n.action_date,
+        })),
+      };
+    })
+  );
+}
+
+export async function saveCampaigns(campaigns: Campaign[]): Promise<void> {
+  console.warn('saveCampaigns() is deprecated. Use addCampaign(), updateCampaign(), etc.');
+}
+
+export async function addCampaign(campaign: Omit<Campaign, 'id'>): Promise<string> {
+  const [inserted] = await sql<{ id: string }[]>`
+    INSERT INTO campaigns (
+      name, job_id, job_title, link_job, start_date, end_date,
+      channels, total_candidates, hired, response_rate, status
+    ) VALUES (
+      ${campaign.name},
+      ${campaign.jobId},
+      ${campaign.jobTitle},
+      ${campaign.linkJob || null},
+      ${campaign.startDate},
+      ${campaign.endDate},
+      ${sql.array(campaign.channels)},
+      ${campaign.totalCandidates},
+      ${campaign.hired},
+      ${campaign.responseRate},
+      ${campaign.status}
+    )
+    RETURNING id
+  `;
+  
+  return inserted.id;
+}
+
+export async function updateCampaign(
+  campaignId: string,
+  updates: Partial<Campaign>
+): Promise<void> {
+  const dbUpdates: any = {};
+  
+  if (updates.name) dbUpdates.name = updates.name;
+  if (updates.jobId) dbUpdates.job_id = updates.jobId;
+  if (updates.jobTitle) dbUpdates.job_title = updates.jobTitle;
+  if (updates.linkJob) dbUpdates.link_job = updates.linkJob;
+  if (updates.startDate) dbUpdates.start_date = updates.startDate;
+  if (updates.endDate) dbUpdates.end_date = updates.endDate;
+  if (updates.channels) dbUpdates.channels = updates.channels;
+  if (updates.totalCandidates !== undefined) dbUpdates.total_candidates = updates.totalCandidates;
+  if (updates.hired !== undefined) dbUpdates.hired = updates.hired;
+  if (updates.responseRate !== undefined) dbUpdates.response_rate = updates.responseRate;
+  if (updates.status) dbUpdates.status = updates.status;
+  
+  await sql`
+    UPDATE campaigns
+    SET ${sql(dbUpdates)}
+    WHERE id = ${campaignId}
+  `;
+}
+
+export async function deleteCampaign(campaignId: string): Promise<void> {
+  await sql`DELETE FROM campaigns WHERE id = ${campaignId}`;
+}
+
+// ============================================
+// DATASETS OPERATIONS
+// ============================================
+
+export async function loadDatasets(): Promise<Dataset[]> {
+  try {
+    const datasets = await sql<any[]>`
+      SELECT * FROM datasets ORDER BY created_at DESC
+    `;
+    
+    const datasetsWithCandidates = await Promise.all(
+      datasets.map(async (dataset) => {
+        const candidates = await sql<any[]>`
+          SELECT * FROM dataset_candidates WHERE dataset_id = ${dataset.id}
+        `;
+        
+        return {
+          id: dataset.id,
+          name: dataset.name,
+          description: dataset.description,
+          candidateCount: dataset.candidate_count,
+          createdAt: dataset.created_at,
+          lastUpdated: dataset.updated_at,
+          source: dataset.source,
+          candidates: candidates.map(c => ({
+            id: c.id,
+            name: c.name,
+            phone: c.phone,
+            postcode: c.postcode,
+            location: c.location,
+            trade: c.trade,
+            blueCard: c.blue_card,
+            greenCard: c.green_card,
+          })),
+        };
+      })
+    );
+    
+    return datasetsWithCandidates;
+  } catch (error) {
+    console.error('Error loading datasets:', error);
+    return [];
+  }
+}
+
+export async function saveDatasets(datasets: Dataset[]): Promise<void> {
+  console.warn('saveDatasets() is deprecated. Use addDataset(), updateDataset(), etc.');
+}
+
+export async function addDataset(dataset: Omit<Dataset, 'id'>): Promise<string> {
+  const [inserted] = await sql<{ id: string }[]>`
+    INSERT INTO datasets (name, description, candidate_count, source)
+    VALUES (${dataset.name}, ${dataset.description}, ${dataset.candidateCount}, ${dataset.source})
+    RETURNING id
+  `;
+  
+  return inserted.id;
+}
+
+export async function updateDataset(
+  datasetId: string,
+  updates: Partial<Dataset>
+): Promise<void> {
+  const dbUpdates: any = {};
+  
+  if (updates.name) dbUpdates.name = updates.name;
+  if (updates.description) dbUpdates.description = updates.description;
+  if (updates.candidateCount !== undefined) dbUpdates.candidate_count = updates.candidateCount;
+  if (updates.source) dbUpdates.source = updates.source;
+  
+  await sql`
+    UPDATE datasets
+    SET ${sql(dbUpdates)}
+    WHERE id = ${datasetId}
+  `;
+}
+
+export async function deleteDataset(datasetId: string): Promise<void> {
+  await sql`DELETE FROM datasets WHERE id = ${datasetId}`;
+}
+
+// ============================================
+// CAMPAIGN CANDIDATES
+// ============================================
+
+export async function addCampaignCandidate(
+  campaignId: string,
+  candidate: Omit<CampaignCandidate, 'id'>
+): Promise<string> {
+  const [inserted] = await sql<{ id: string }[]>`
+    INSERT INTO campaign_candidates (
+      campaign_id, forename, surname, tel_mobile, email,
+      call_status, available_to_work, interested, know_referee,
+      last_contact, experience
+    ) VALUES (
+      ${campaignId},
+      ${candidate.forename},
+      ${candidate.surname},
+      ${candidate.telMobile},
+      ${candidate.email || null},
+      ${candidate.callStatus},
+      ${candidate.availableToWork},
+      ${candidate.interested},
+      ${candidate.knowReferee},
+      ${candidate.lastContact || null},
+      ${candidate.experience || null}
+    )
+    RETURNING id
+  `;
+  
+  return inserted.id;
+}
+
+export async function updateCampaignCandidate(
+  campaignId: string,
+  candidateId: string,
+  updates: Partial<CampaignCandidate>
+): Promise<void> {
+  const dbUpdates: any = {};
+  
+  if (updates.forename) dbUpdates.forename = updates.forename;
+  if (updates.surname) dbUpdates.surname = updates.surname;
+  if (updates.telMobile) dbUpdates.tel_mobile = updates.telMobile;
+  if (updates.email) dbUpdates.email = updates.email;
+  if (updates.callStatus) dbUpdates.call_status = updates.callStatus;
+  if (updates.availableToWork !== undefined) dbUpdates.available_to_work = updates.availableToWork;
+  if (updates.interested !== undefined) dbUpdates.interested = updates.interested;
+  if (updates.knowReferee !== undefined) dbUpdates.know_referee = updates.knowReferee;
+  if (updates.lastContact) dbUpdates.last_contact = updates.lastContact;
+  if (updates.experience) dbUpdates.experience = updates.experience;
+  
+  await sql`
+    UPDATE campaign_candidates
+    SET ${sql(dbUpdates)}
+    WHERE id = ${candidateId} AND campaign_id = ${campaignId}
+  `;
+}
+
+export async function deleteCampaignCandidate(
+  campaignId: string,
+  candidateId: string
+): Promise<void> {
+  await sql`DELETE FROM campaign_candidates WHERE id = ${candidateId} AND campaign_id = ${campaignId}`;
+}
+
+// Additional helper functions for campaign targets, matrices, etc. can be added as needed
+
